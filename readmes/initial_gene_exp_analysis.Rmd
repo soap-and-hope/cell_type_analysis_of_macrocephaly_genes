@@ -1,0 +1,412 @@
+---
+title: "initial_gene_exp_analysis"
+output: html_document
+date: "2025-05-29"
+---
+
+## Extracting Expression Data from OMIM_data
+
+Loading in the two separate OMIM datasets:
+
+1.  General macrocephaly genes
+2.  Other brain enlargement disorders - Sotos and Malan syndrome
+
+```{r}
+#Loading in dataset
+OMIM_dat <- read.delim("../data/OMIM_Databases_Gene_Map_Queries/cleaned OMIM_data_macro.tsv", sep="\t", na="NA")
+View(OMIM_dat)
+print(rownames(seurat_subset_cleaned))
+extracting_genes <- intersect(rownames(seurat_subset_cleaned), OMIM_dat$Mouse.Gene..from.MGI.) #Don't need to convert anything - we had a whole column for it - 175 genes
+View(extracting_genes)
+print(extracting_genes)
+
+#Loading in second OMIM dataset 
+OMIM_dat_2 <- read.delim("../data/OMIM_Databases_Gene_Map_Queries/cleaned_OMIM_data_MALAN_SOTOS.tsv", sep = "\t", na = "NA")
+head(OMIM_dat_2)
+
+malan_sotos_genes <- intersect(rownames(seurat_subset_cleaned), OMIM_dat_2$Mouse.Gene..from.MGI.)
+View(malan_sotos_genes)
+```
+
+## Initial Downstream Analysis and Data Visualization of Macrocephaly Genes 
+
+### 1. Plot Heatmap of Expression of Macrocephaly Genes
+
+#### AverageExpression vs AggregateExpression
+
+```{r}
+
+print(intersect(extracting_genes, rownames(seurat_subset_cleaned)))
+avg_exp <- AverageExpression(
+  seurat_subset_cleaned, features = extracting_genes, group.by = "New_cellType", slot = "data"
+)
+
+avg_exp_mat <- as.matrix(avg_exp$RNA)
+dim(avg_exp_mat) #[1] 175 24
+
+
+#Apply the z_score normalization function to the genes (rows)
+z_avg_exp <- t(apply(avg_exp_mat, 1, function(x) (x-mean(x))/sd(x))) ##Makes sure the data is reformatted back to genes as rows 
+
+#Used to check if z-score has been correctly calculated 
+print(mean(z_avg_exp[1,])) #[1] 1.387779e-17- Close to zero 
+print(mean(z_avg_exp[,1])) #[1] NaN
+
+#Doing final check that the z-score normalization was ran correctly 
+sd_row <- apply(z_avg_exp, 1, sd) #All have an SD of 1 
+mean_row <- apply(z_avg_exp,1, mean) #All have a mean value clos
+mean_col <- apply(z_avg_exp, 2, mean) #All NaN for Cell Types - SHOULD BE 
+
+
+#Checking for any non-variance genes or NaN values BEFORE z-score normalization
+error_genes <- apply(z_avg_exp, 1, function (x){
+  #Check for NAs
+  any(is.na(x)) ||
+  
+  #Check for infinite vals
+  any(is.infinite(x)) ||
+  
+  #Check for zero SD (Non-var)
+  sd(x, na.rm = TRUE) == 0
+})
+
+z_avg_exp_filtered <- z_avg_exp[!error_genes,] #Filter out genes that are flagged in the function
+print(dim(z_avg_exp_filtered))
+
+############ Plotting z_score_normalized graphs 
+
+########## Graph #1 using Pretty Heatmap
+
+install.packages("pheatmap")
+library(pheatmap)
+library(RColorBrewer)
+
+
+avg_exp_z_heatmap <- pheatmap(z_avg_exp_filtered, color = colorRampPalette(brewer.pal(5, "RdPu"))(100), clustering_method = "complete", cluster_rows = TRUE, cluster_cols = TRUE, fontsize_row = 8, fontsize_col = 8, angle_col = 45, raster = TRUE, annotation_legend_param = list(title = "Z-score Normalization"),filename = "../outputs/z_score_norm_heatmaps/avg_exp_z_score_macro_pheatmap.png")
+
+print(avg_exp_z_heatmap)
+
+
+###TRY AND MAKE IT WORK TO INCLUDE A LABEL FOR THE COLOUR BAR 
+
+library(reshape2)
+library(ggplot2)
+
+# Assuming z_agg_exp_filtered is a matrix
+df <- melt(z_avg_exp_filtered)
+names(df) <- c("Row", "Column", "Value")
+
+# Create a ggplot heatmap
+p <- ggplot(df, aes(x = Column, y = Row, fill = Value)) +
+  geom_tile() +
+  scale_fill_gradientn(colors = colorRampPalette(brewer.pal(5, "RdPu"))(100),
+                      name = "Z-score\nNormalization") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        axis.text.y = element_text(size = 8)) +
+  coord_fixed()
+
+# Save the plot
+ggsave("../outputs/z_score_norm_heatmaps/avg_exp_z_score_macro_ggplot.png", p, width = 30, height = 20, units = "in", dpi = 100)
+
+test_color <- colorRampPalette(brewer.pal(5,"RdPu"))(100)
+print(test_color)
+```
+
+**As of v5, Seurat recommends using AggregateExpression over AverageExpression**
+
+```{r}
+
+intersect(extracting_genes, rownames(seurat_subset))
+
+##Altnernative method using AggregateExpression
+agg_exp <- AggregateExpression(
+  seurat_subset_cleaned, features = extracting_genes, group.by = "New_cellType", slot = "data"
+) #Seurat recommended using AggregateExpression
+
+agg_exp_mat <- as.matrix(agg_exp$RNA)
+dim(agg_exp_mat)
+
+#Apply the z_score normalization function to the genes (rows)
+z_agg_exp <- t(apply(agg_exp_mat, 1, function(x) (x-mean(x))/sd(x)))
+
+#Used to check if z-score has been correctly calculated 
+print(mean(z_agg_exp[1,])) #[1] -2.659909e-17 - Close to zero 
+print(mean(z_agg_exp[,1])) #[1] NaN
+
+#Doing final check that the z-score normalization was ran correctly 
+sd_row <- apply(z_agg_exp, 1, sd) #All have an SD of 1 
+mean_row <- apply(z_agg_exp,1, mean) #All have a mean value clos
+mean_col <- apply(z_agg_exp, 2, mean) #All NaN for Cell Types - SHOULD BE 
+
+
+#Checking for any non-variance genes or NaN values BEFORE z-score normalization
+error_genes <- apply(z_agg_exp, 1, function (x){
+  #Check for NAs
+  any(is.na(x)) ||
+  
+  #Check for infinite vals
+  any(is.infinite(x)) ||
+  
+  #Check for zero SD (Non-var)
+  sd(x, na.rm = TRUE) == 0
+})
+
+z_agg_exp_filtered <- z_agg_exp[!error_genes,] #Filter out genes that are flagged in the function
+print(dim(z_agg_exp_filtered))
+
+
+install.packages("pheatmap")
+library(pheatmap)
+library(RColorBrewer)
+
+agg_exp_z_heatmap <- pheatmap(z_agg_exp_filtered, color = colorRampPalette(brewer.pal(5, "RdPu"))(100), clustering_method = "complete", cluster_rows = TRUE, cluster_cols = TRUE, fontsize_row = 8, fontsize_col = 8, angle_col = 45, raster = TRUE, annotation_legend_param = list(title = "Z-score Normalization"),filename = "../outputs/z_score_norm_heatmaps/agg_exp_z_score_macro_pheatmap.png")
+
+print(agg_exp_z_heatmap)
+View()
+
+
+###TRY AND MAKE IT WORK TO INCLUDE A LABEL FOR THE COLOUR BAR 
+
+library(reshape2)
+library(ggplot2)
+
+# Assuming z_agg_exp_filtered is a matrix
+df <- melt(z_agg_exp_filtered)
+names(df) <- c("Row", "Column", "Value")
+
+# Create a ggplot heatmap
+p <- ggplot(df, aes(x = Column, y = Row, fill = Value)) +
+  geom_tile() +
+  scale_fill_gradientn(colors = colorRampPalette(brewer.pal(5, "RdPu"))(100),
+                      name = "Z-score\nNormalization") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        axis.text.y = element_text(size = 8)) +
+  coord_fixed()
+
+# Save the plot
+ggsave("../outputs/z_score_norm_heatmaps/agg_exp_z_score_macro_ggplot.png", p, width = 30, height = 20, units = "in", dpi = 100)
+
+test_color <- colorRampPalette(brewer.pal(5,"RdPu"))(100)
+print(test_color)
+
+
+```
+
+##### Confirming which Heatmap is correct by using median expression of each gene across all cell types and then performing z-score normalization
+
+```{r}
+
+gene_exp <- GetAssayData(seurat_subset_cleaned, assay = "RNA", slot = "data")#Pulling out the normalized 'data' slot/layer 
+gene_exp_df <- as.data.frame(gene_exp)
+gene_exp_macro <- subset(gene_exp_df, rownames(gene_exp_df) %in% extracting_genes) #subsetting to include data of only macrocephaly gene
+
+View(gene_exp_macro)
+
+#Extracting cell type information from meta.data 
+cell_types <- seurat_subset_cleaned@meta.data$New_cellType
+names(cell_types) <- colnames(seurat_subset_cleaned)
+
+unique_cell_types <- unique(cell_types)
+genes_by_cell_types <- matrix(0, 
+                              nrow = nrow(gene_exp_macro), 
+                              ncol = length(unique_cell_types),
+                              dimnames = list(rownames(gene_exp_macro), unique_cell_types))
+
+#Calculating median expression for each gene in EACH cell type 
+for (cell_type in unique_cell_types) {
+  cells_of_type <- names(cell_types)[cell_types == cell_type]
+  
+  #Calculate median expression for each gene in this cell type 
+  genes_by_cell_types[, cell_type] <- apply(gene_exp_macro[, cells_of_type, drop = FALSE], 1, median, na.rm = TRUE)
+}
+
+#Conver to dataframe 
+med_exp_gene_in_cell_type_df <- as.data.frame(genes_by_cell_types)
+
+View(head(med_exp_gene_in_cell_type_df))
+
+
+######## Try Plotting median expression as it is without the z-score normalization
+library(ggplot2)
+library(reshape2)
+
+# Convert dataframe to long format
+long_df <- melt(as.matrix(med_exp_gene_in_cell_type_df))
+
+# Create plot
+median_heatmap <- ggplot(long_df, aes(x = Var2, y = Var1, fill = value)) +
+  geom_tile() +
+  scale_fill_gradientn(colors = colorRampPalette(brewer.pal(5, "RdPu"))(100),
+                      name = "Z-score\nNormalization") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        axis.text.y = element_text(size = 8)) +
+  coord_fixed()
+
+ggsave("median_pre_normalization.png", median_heatmap, width = 30, height = 30)
+
+#Performing z-score normalization
+
+########### Approach 1 
+z_score_med_exp <- t(apply(med_exp_gene_in_cell_type_df, 1, function(x) (x-mean(x))/sd(x)))
+
+########### Approach 2 
+library(matrixStats)
+gene_means <- rowMeans(med_exp_gene_in_cell_type_df, na.rm = TRUE)
+gene_sds <- rowSds(as.matrix(med_exp_gene_in_cell_type_df), na.rm = TRUE)
+
+z_score_df <- sweep(med_exp_gene_in_cell_type_df, 1, gene_means, "-")
+z_score_df <- sweep(z_score_df, 1, gene_sds, "/")
+
+
+########### Approach 3
+avg_median_per_gene <- rowMeans(med_exp_gene_in_cell_type_df, na.rm = TRUE)
+sd_median_per_gene <- apply(med_exp_gene_in_cell_type_df, 1, sd, na.rm = TRUE)
+
+z_score_df_2 <- med_exp_gene_in_cell_type_df
+
+for (i in 1:nrow(z_score_df_2)) {
+  if (is.na(sd_median_per_gene[i]) || sd_median_per_gene[i] == 0) {
+    z_score_df_2[i, ] <- 0 
+  } else {
+    z_score_df_2[i,] <- (med_exp_gene_in_cell_type_df[i,] - avg_median_per_gene[i]) / sd_median_per_gene[i]
+  }
+}
+
+########## Appraoch 4 - Using MAD 
+median_mad_normalize <- function(df) {
+  normalize_df <- df #Create empty dataframe 
+  
+  for (gene in rownames(df)) {
+    values <- as.numeric(df[gene, ])
+    
+    gene_median <- median(values, na.rm = TRUE)
+    gene_MAD <- mad(values, na.rm = TRUE, constant = 1)
+    
+    if(gene_MAD == 0) {
+      normalize_df[gene, ] <- 0
+    } else {
+      normalize_df[gene, ] <- (values - gene_median) / gene_MAD
+    }
+  }
+  
+  return(normalize_df)
+} 
+
+z_score_MAD_df <- median_mad_normalize(med_exp_gene_in_cell_type_df)
+
+#Final Checks and removing non-zero variance values
+#Used to check if z-score has been correctly calculated 
+print(mean(z_score_med_exp[1,])) #[1] Is returning an NA - Need to check why 
+print(mean(z_score_med_exp[,1])) #[1] NaN
+
+#Doing final check that the z-score normalization was ran correctly 
+sd_row <- apply(z_score_med_exp, 1, sd) #Either returning an NA or 1 
+mean_row <- apply(z_score_MAD_df,1, mean) #Either returning an NA or a value close to zero 
+mean_col <- apply(z_score_df, 2, mean) #All NaN for Cell Types - SHOULD BE 
+
+
+#Checking for any non-variance genes or NaN values AFTER z-score normalization
+error_genes <- apply(z_score_med_exp, 1, function (x){
+  #Check for NAs
+  any(is.na(x)) ||
+  
+  #Check for infinite vals
+  any(is.infinite(x)) ||
+  
+  #Check for zero SD (Non-var)
+  sd(x, na.rm = TRUE) == 0
+})
+
+z_score_med_filtered <- z_score_med_exp[!error_genes, ]
+
+z_score_df_filtered <- z_score_df[!error_genes,] #Filter out genes that are flagged in the function
+print(dim(z_score_df_filtered))
+
+z_score_df_2_filtered <- z_score_df_2[!error_genes, ]
+
+
+z_score_med_exp_heatmap <- pheatmap(z_score_med_filtered, color = colorRampPalette(brewer.pal(5, "RdPu"))(100), clustering_method = "complete", cluster_rows = TRUE, cluster_cols = TRUE, fontsize_row = 8, fontsize_col = 8, angle_col = 45, raster = TRUE, annotation_legend_param = list(title = "Z-score Normalization"),filename = "median_exp_z_score_macro_pheatmap_manual.png")
+```
+
+Median was not an effective method - too many zero expression values
+
+### 2. Plot Heatmap of Other Macro Genes
+
+#### AverageExpression 
+
+```{r}
+print(intersect(malan_sotos_genes, rownames(seurat_subset_cleaned)))
+avg_exp <- AverageExpression(
+  seurat_subset_cleaned, features = malan_sotos_genes, group.by = "New_cellType", slot = "data"
+)
+
+avg_exp_mat <- as.matrix(avg_exp$RNA)
+dim(avg_exp_mat) #[1] 13 24
+
+
+#Apply the z_score normalization function to the genes (rows)
+z_avg_exp <- t(apply(avg_exp_mat, 1, function(x) (x-mean(x))/sd(x))) ##Makes sure the data is reformatted back to genes as rows 
+
+#Used to check if z-score has been correctly calculated 
+print(mean(z_avg_exp[1,])) #[1] -6.667e-18- Close to zero 
+print(mean(z_avg_exp[,1])) 
+
+#Doing final check that the z-score normalization was ran correctly 
+sd_row <- apply(z_avg_exp, 1, sd) #All have an SD of 1 
+mean_row <- apply(z_avg_exp,1, mean) 
+mean_col <- apply(z_avg_exp, 2, mean)  
+
+
+#Checking for any non-variance genes or NaN values BEFORE z-score normalization
+error_genes <- apply(z_avg_exp, 1, function (x){
+  #Check for NAs
+  any(is.na(x)) ||
+  
+  #Check for infinite vals
+  any(is.infinite(x)) ||
+  
+  #Check for zero SD (Non-var)
+  sd(x, na.rm = TRUE) == 0
+})
+
+z_avg_exp_filtered <- z_avg_exp[!error_genes,] #Filter out genes that are flagged in the function
+print(dim(z_avg_exp_filtered)) #[1] 13 24 - No errors 
+
+############ Plotting z_score_normalized graphs 
+
+########## Graph #1 using Pretty Heatmap
+
+install.packages("pheatmap")
+library(pheatmap)
+library(RColorBrewer)
+
+
+avg_exp_z_heatmap <- pheatmap(z_avg_exp_filtered, color = colorRampPalette(brewer.pal(5, "RdPu"))(100), clustering_method = "complete", cluster_rows = TRUE, cluster_cols = TRUE, fontsize_row = 8, fontsize_col = 8, angle_col = 45, raster = TRUE, annotation_legend_param = list(title = "Z-score Normalization"),filename = "../outputs/z_score_norm_heatmaps/avg_exp_z_score_malan_and_sotos_pheatmap.png")
+
+print(avg_exp_z_heatmap)
+
+
+###TRY AND MAKE IT WORK TO INCLUDE A LABEL FOR THE COLOUR BAR 
+
+library(reshape2)
+library(ggplot2)
+
+# Assuming z_agg_exp_filtered is a matrix
+df <- melt(z_avg_exp_filtered)
+names(df) <- c("Row", "Column", "Value")
+
+# Create a ggplot heatmap
+p <- ggplot(df, aes(x = Column, y = Row, fill = Value)) +
+  geom_tile() +
+  scale_fill_gradientn(colors = colorRampPalette(brewer.pal(5, "RdPu"))(100),
+                      name = "Z-score\nNormalization") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 15),
+        axis.text.y = element_text(size = 15)) +
+  coord_fixed()
+
+# Save the plot
+ggsave("../outputs/z_score_norm_heatmaps/avg_exp_z_score_malan_and_sotos_ggplot.png", p, width = 30, height = 20, units = "in", dpi = 100)
+
+test_color <- colorRampPalette(brewer.pal(5,"RdPu"))(100)
+print(test_color)
+```

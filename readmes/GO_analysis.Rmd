@@ -1,0 +1,969 @@
+---
+title: "GO_analysis"
+output: html_document
+date: "2025-05-29"
+---
+
+```{r}
+
+#Loading in dataset
+OMIM_dat <- read.delim("../data/OMIM_Databases_Gene_Map_Queries/cleaned OMIM_data_macro.tsv", sep="\t", na="NA")
+View(OMIM_dat)
+print(rownames(seurat_subset_cleaned))
+extracting_genes <- intersect(rownames(seurat_subset_cleaned), OMIM_dat$Mouse.Gene..from.MGI.) #Don't need to convert anything - we had a whole column for it - 175 genes
+View(extracting_genes)
+print(extracting_genes)
+
+#Loading in second OMIM dataset 
+OMIM_dat_2 <- read.delim("../data/OMIM_Databases_Gene_Map_Queries/cleaned_OMIM_data_MALAN_SOTOS.tsv", sep = "\t", na = "NA")
+head(OMIM_dat_2)
+
+malan_sotos_genes <- intersect(rownames(seurat_subset_cleaned), OMIM_dat_2$Mouse.Gene..from.MGI.)
+View(malan_sotos_genes)
+
+combined_genes <- union(malan_sotos_genes, extracting_genes)#"union will discard any duplicated values in the arguments"
+duplicated(combined_genes) #[1] FALSE
+length(combined_genes) #183
+("Setd2" %in% combined_genes) #[1] TRUE - hasn't removed both duplicates 
+
+upreg_markers_updat <- read.csv("../data/FindAllMarkers_Upreg_Coding_ONLY.csv")
+
+macro_upreg_markers_updat <- upreg_markers_updat[upreg_markers_updat$gene %in% extracting_genes, ]
+sotos_malan_upreg_markers_updat <- upreg_markers_updat[upreg_markers_updat$gene %in% malan_sotos_genes, ]
+combined_upreg_genes <- upreg_markers_updat[upreg_markers_updat$gene %in% combined_genes, ]
+
+gene_mapping_filtered <- read.csv("../metadata/gene_mapping_filtered.csv")
+```
+
+
+
+## Gene Ontology (GO) Enrichment Analysis - Diving into the potential functional properties and groups within upregulated macrocephaly genes 
+
+**Using the 'Gene-set enrichment (non-genetic)' Rmd by Andrew Pocklington and Nicholas Clifton**
+
+For Gene Ontology Analysis, it is important to have the correct background annotation set - e.g., when looking at brain genes, if your background set is the whole genome, some genes might be falsely considered enriched as there is a higher abundance of those types of genes in the brain. For our initial GO analysis, we will use a similar and observe what GO terms are flagged. For this, our background set is the same as previous enrichment analysis tests i.e., the whole scRNA-seq dataset
+
+-   Can use the `gprofiler2` package: *"A toolset for functional enrichment analysis, and visualization, gene/protein/SNP identifier conversion and mapping orthologous genes across species via 'g:Profiler'. The main tools are (1) 'g:GOSt' - functional enrichment analysis and visualization gene lists; (2)'g:Convert - gene/protein/transcript identifier conversion across various namespaces; (3) 'g:Orth' - orthology search across species ; (4) 'g:SNPense' - mapping SNP rs identifiers to chromosome positions, genes and variant effects.'*
+
+#### Question 1: What types of functions are enriched in macrocephaly genes compared to other brain genes?
+
+```{r}
+install.packages("gprofiler2")
+library(gprofiler2)
+#gprofiler requires Ensembl Gene IDs as an input - Luckily we still have our original gene mapping that we used to restrict our original seurat object to protein-coding genes 
+head(gene_mapping_filtered)
+
+
+#Running a basic GO analysis test - all macrocephaly and all scRNA-seq; no upregulated or DEGs-specific analysis yet. 
+
+GO_test_set <- gene_mapping_filtered[gene_mapping_filtered$gene_name %in% extracting_genes, ] #subset gene_mapping by gene names found in the macrocephaly geneset 
+GO_bkg_set <- gene_mapping_filtered
+
+test_GO_analysis <- gost(GO_test_set$ensembl_id, organism = "mmusculus", exclude_iea = TRUE, correction_method = "bonferroni", sources = c("GO", "KEGG"), custom_bg = GO_bkg_set$ensembl_id, significant = TRUE,)
+
+gostplot(test_GO_analysis)
+
+#Extract results as a data frame 
+GO_terms_df <- test_GO_analysis$result
+GO_terms_df <- as.data.frame(GO_terms_df) ## It's not coercingggggggggg ahhhhhhhh
+sapply(GO_terms_df, class) #The "parents" column is a list 
+
+#Flattening the "parents" column 
+GO_terms_df$parents_str <- sapply(GO_terms_df$parents, function(x) paste(x, collapse = ","))
+GO_terms_df$parents <- NULL
+
+write.csv(GO_terms_df, "GO_terms_macro_tester.csv")
+```
+
+Now that we have tested the GO analysis tools, we are going to apply the same process with the DEGs. Our test set will be the DEGs macrocephaly genes vs the background set of all DEGs (like we did for the Fisher's Enrichment Test)
+
+### 1. GO Enrichment Analysis - Upregulated Macrocephaly Genes
+
+#### Question: Within the upregulated genes, what functions do significantly enriched macrocephaly genes possess compared to other upregulated genes? 
+
+```{r}
+GO_test_set <- gene_mapping_filtered[gene_mapping_filtered$gene_name %in% macro_upreg_markers_updat$gene, ] #subset gene_mapping by gene names found in the upregulated macrocephaly geneset
+
+GO_bkg_set <- subset(gene_mapping_filtered, gene_mapping_filtered$gene_name %in% upreg_markers_updat$gene) 
+
+
+
+#### When comparing the number of unique gene names in the upreg_markers_updat df and the ones in GO_bkg_set, I found a 5 gene difference mostly likely due to the gene name being assigned to two or more IDs
+
+table(duplicated(GO_bkg_set$gene_name)) #[1] TRUE - 5 
+
+#To see which ones in particular duplicated
+
+dup_gene_names <- GO_bkg_set$gene_name[duplicated(GO_bkg_set$gene_name)] #[1] "Umad1"   "U2af1l4" "Itgam"   "Map2k7"  "Pcdhga8"
+
+dup_table <- GO_bkg_set[GO_bkg_set$gene_name %in% dup_gene_names, ]
+dup_table #Can see which IDs are assigned to them 
+
+
+#Not removing then - as they all have different ENMUSG, therefore are most likely unique genes
+
+upreg_GO_analysis <- gost(GO_test_set$ensembl_id, organism = "mmusculus", exclude_iea = TRUE, correction_method = "bonferroni", sources = c("GO", "KEGG"), custom_bg = GO_bkg_set$ensembl_id, significant = TRUE,)
+
+gostplot(upreg_GO_analysis)
+
+#Extract results as a data frame 
+GO_terms_df <- upreg_GO_analysis$result
+GO_terms_df <- as.data.frame(GO_terms_df) ## It's not coercingggggggggg ahhhhhhhh
+sapply(GO_terms_df, class) #The "parents" column is a list 
+
+#Flattening the "parents" column 
+GO_terms_df$parents_str <- sapply(GO_terms_df$parents, function(x) paste(x, collapse = ","))
+GO_terms_df$parents <- NULL
+
+write.csv(GO_terms_df, "../data/GO_terms/GO_terms_macro_DEGs.csv")
+```
+
+-   To get which genes in particular matched, need to add the evocodes argument in the gost function
+
+    ```{r}
+    upreg_GO_analysis <- gost(GO_test_set$ensembl_id, organism = "mmusculus", exclude_iea = TRUE, correction_method = "bonferroni", sources = c("GO", "KEGG"), custom_bg = GO_bkg_set$ensembl_id, significant = TRUE, evcodes = TRUE)
+
+    gostplot(upreg_GO_analysis)
+
+    #Extract results as a data frame 
+    GO_terms_df <- upreg_GO_analysis$result
+    GO_terms_df <- as.data.frame(GO_terms_df) 
+    sapply(GO_terms_df, class) 
+
+    #Flattening the "parents" column 
+    GO_terms_df$parents_str <- sapply(GO_terms_df$parents, function(x) paste(x, collapse = ","))
+    GO_terms_df$parents <- NULL
+
+    write.csv(GO_terms_df, "../outputs/GO_analysis/GO_terms_DEGs_macro_with_genes.csv")
+    
+    #Trying to save interactive plot 
+    library(htmlwidgets)
+    gost_plot <- gostplot(upreg_GO_analysis)
+    saveWidget(gost_plot, file = "../outputs/GO_analysis/gost_plot_macro_with_genes.html")
+    ```
+
+### 2. GO Enrichment Analysis - Upregulated Malan/Sotos Genes
+
+#### Question: Within the upregulated genes, what functions do significantly enriched malan/sotos genes possess compared to other upregulated genes? 
+
+```{r}
+GO_test_set <- gene_mapping_filtered[gene_mapping_filtered$gene_name %in% sotos_malan_upreg_markers_updat$gene, ] #subset gene_mapping by gene names found in the upregulated malan/sotos geneset
+
+GO_bkg_set <- subset(gene_mapping_filtered, gene_mapping_filtered$gene_name %in% upreg_markers_updat$gene) 
+
+
+
+#### When comparing the number of unique gene names in the upreg_markers_updat df and the ones in GO_bkg_set, I found a 5 gene difference mostly likely due to the gene name being assigned to two or more IDs
+
+table(duplicated(GO_bkg_set$gene_name)) #[1] TRUE - 5 
+
+#To see which ones in particular duplicated
+
+dup_gene_names <- GO_bkg_set$gene_name[duplicated(GO_bkg_set$gene_name)] #[1] "Umad1"   "U2af1l4" "Itgam"   "Map2k7"  "Pcdhga8"
+
+dup_table <- GO_bkg_set[GO_bkg_set$gene_name %in% dup_gene_names, ]
+dup_table #Can see which IDs are assigned to them 
+
+
+#Not removing then - as they all have different ENMUSG, therefore are most likely unique genes
+
+upreg_GO_analysis_2 <- gost(GO_test_set$ensembl_id, organism = "mmusculus", exclude_iea = TRUE, correction_method = "bonferroni", sources = c("GO", "KEGG"), custom_bg = GO_bkg_set$ensembl_id, significant = TRUE, evcodes = TRUE)
+
+gostplot(upreg_GO_analysis_2)
+
+#Extract results as a data frame 
+GO_terms_df <- upreg_GO_analysis_2$result
+GO_terms_df <- as.data.frame(GO_terms_df) 
+sapply(GO_terms_df, class) 
+
+#Flattening the "parents" column 
+GO_terms_df$parents_str <- sapply(GO_terms_df$parents, function(x) paste(x, collapse = ","))
+GO_terms_df$parents <- NULL
+
+write.csv(GO_terms_df, "../data/GO_terms/GO_terms_DEGs_malan_sotos_with_genes.csv")
+```
+
+### 3. GO Enrichment Analysis - Combined Genes
+Again. it might not be the most effective to perform GO analysis on just the small mala/sotos syndrome dataset
+#### Question: Within the upregulated genes, what functions do significantly enriched macro and malan/sotos genes possess compared to other upregulated genes? 
+
+```{r}
+GO_test_set <- gene_mapping_filtered[gene_mapping_filtered$gene_name %in% combined_upreg_genes$gene, ] #subset gene_mapping by gene names found in the upregulated malan/sotos geneset
+
+GO_bkg_set <- subset(gene_mapping_filtered, gene_mapping_filtered$gene_name %in% upreg_markers_updat$gene) 
+
+
+upreg_GO_analysis_3 <- gost(GO_test_set$ensembl_id, organism = "mmusculus", exclude_iea = TRUE, correction_method = "bonferroni", sources = c("GO", "KEGG"), custom_bg = GO_bkg_set$ensembl_id, significant = TRUE, evcodes = TRUE)
+
+gostplot(upreg_GO_analysis_3)
+
+#Extract results as a data frame 
+GO_terms_df <- upreg_GO_analysis_3$result
+GO_terms_df <- as.data.frame(GO_terms_df) 
+sapply(GO_terms_df, class) 
+
+#Flattening the "parents" column 
+GO_terms_df$parents_str <- sapply(GO_terms_df$parents, function(x) paste(x, collapse = ","))
+GO_terms_df$parents <- NULL
+
+write.csv(GO_terms_df, "../data/GO_terms/GO_terms_DEGs_combined_with_genes.csv")
+
+#Saving interactive plot 
+gost_plot_2 <- gostplot(upreg_GO_analysis_3)
+    saveWidget(gost_plot_2, file = "../outputs/GO_analysis/gost_plot_combined_with_genes.html")
+```
+
+## Functional Clustering of GO Terms - Semantic Similarity
+
+Semantic Similarity: Comparison and clustering of GO terms based on their relationship in the GO hierarchy, using metrics like path length, information content, or the lowest common ancestor
+
+For this, we can use the Bioconductor package, `simplifyEnrichment`
+
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("simplifyEnrichment")
+library(simplifyEnrichment)
+
+
+
+BiocManager::install("org.Hs.eg.db") #Installing this package (human genome annotation package?) as I was getting an erro when I tried to use simplifyEnrichment 
+
+```
+
+##### Performing Similarity Searching with original tester dataset 
+
+```{r}
+
+GO_terms_tester <- read.csv("../data/GO_terms/GO_macro_terms_tester.csv")
+head(GO_terms_tester) #
+GO_terms_tester_IDs <- GO_terms_tester$term_id
+head(GO_terms_tester_IDs)
+
+GO_similarity_tester <- GO_similarity(GO_terms_tester_IDs, ont = "BP")
+simplifyGO(GO_similarity_tester)
+```
+
+#### 1. Semantic Similarity of Upregulated Macrocephaly Genes 
+
+```{r}
+
+GO_terms_genes <- read.csv("../data/GO_terms/GO_terms_DEGs_macro_with_genes.csv")
+head(GO_terms_genes) #
+GO_terms_genes_IDs <- GO_terms_genes$term_id
+head(GO_terms_genes_IDs)
+
+GO_similarity_tester <- GO_similarity(GO_terms_genes_IDs, ont = "BP")
+simplifyGO(GO_similarity_tester)
+
+```
+
+```{r}
+#Can use the ouput of GOsimilarity (matrix) to perform hierarchical clustering and saving clustered plot
+png("../outputs/GO_analysis/simplifyGO_upreg_macro.png", width = 1200, height=1000, res = 150)
+ht_clusters(GO_similarity_tester, cl=binary_cut(GO_similarity_tester), order_by_size = TRUE)
+dev.off()
+cluster_terms_mat <- cluster_terms(GO_similarity_tester, method = "binary_cut")
+
+str(cluster_terms_mat) #The 'names' i.e., the GO terms are missing so we need to manually reassign them
+
+names(cluster_terms_mat) <- rownames(GO_similarity_tester)
+str(cluster_terms_mat)
+
+```
+
+#### 3. Semantic Similarity of Upregulated Combined Genes 
+The Malan/Sotos GO analysis set is too small to perform functional clustering so just going to do analysis of the combined dataset
+
+```{r}
+GO_terms_genes_2 <- read.csv("../data/GO_terms/GO_terms_DEGs_combined_with_genes.csv")
+GO_terms_genes_IDs_2 <- GO_terms_genes_2$term_id
+head(GO_terms_genes_IDs_2)
+
+GO_similarity_tester_2 <- GO_similarity(GO_terms_genes_IDs_2, ont = "BP") 
+simplifyGO(GO_similarity_tester_2)
+
+
+png("../outputs/GO_analysis/simplifyGO_upreg_combined.png", width = 1200, height=1000, res = 150)
+ht_clusters(GO_similarity_tester_2, cl=binary_cut(GO_similarity_tester_2), order_by_size = TRUE)
+dev.off()
+```
+
+## GO Analysis of Enriched Cell Types 
+
+From the Enrichment test we identified specific cell types that have significantly upregulated macrocephaly and malan/sotos genes. We can now perform GO analysis to see if there significant GO cluster groups that are associated to cell types - Functions that upregulated macro genes may have in these cell types 
+
+###1. Cell Types with significantly upregulated macrocephaly genes
+#### Question 1: Are there GO terms that are significantly enriched in upregulated genes compared to non-upregulated genes in cell types?
+
+```{r}
+sig_celltypes <- sig_cell_types$New_cellType
+
+output_dir <- "../data/GO_terms/GO_results_per_celltype"
+dir.create(output_dir, showWarnings = FALSE)
+
+Idents(seurat_subset_pc_only) <- "New_cellType"
+
+for (celltype in sig_celltypes){
+  cat("Running GO analysis for:", celltype)
+  
+  upreg_genes_in_celltype <- upreg_markers_updat$gene[upreg_markers_updat$cluster == celltype]
+  
+  #We need to get all genes specific to the cell type x
+  cells_in_type <- WhichCells(seurat_subset_pc_only, idents = celltype)
+  seurat_subset_celltype <- subset(seurat_subset_pc_only, cells = cells_in_type)
+  
+  GO_test_set <- gene_mapping_filtered[gene_mapping_filtered$gene_name %in% upreg_genes_in_celltype, ]
+  GO_bkg_set <- gene_mapping_filtered[gene_mapping_filtered$gene_name %in% rownames(seurat_subset_celltype), ]
+  
+  upreg_GO_analysis_2 <- gost(GO_test_set$ensembl_id, organism = "mmusculus", exclude_iea = TRUE, correction_method = "bonferroni", sources = c("GO", "KEGG"), custom_bg = GO_bkg_set$ensembl_id, significant = TRUE, evcodes = TRUE)
+  
+  GO_result_df <- upreg_GO_analysis_2$result
+  GO_result_df$parents_str <- sapply(GO_result_df$parents, function (x) paste(x, collapse=","))
+  GO_result_df$parents <- NULL
+  GO_result_dfNew_cellType <- celltype
+  
+  safe_name <- gsub("", "_", celltype)
+  write.csv(GO_result_df, file = file.path(output_dir, paste0("GO_terms_", safe_name, "_genes.csv")), row.names=FALSE)
+  
+  cat("Finished GO analysis for: ", celltype, "\n")
+}
+
+```
+
+
+#### Visualisation of GO terms across cell types 
+```{r}
+library(tidyr)
+
+results_dir <- "../data/GO_terms/GO_results_per_celltype"
+
+GO_files <- list.files(results_dir, pattern = ".csv", full.names = TRUE)
+GO_files <- lapply(GO_files, function(file) {
+  #Extracting cell type from the csv file name and using it as a column
+  cell_type <- gsub("^GO_terms_(.*)_genes.csv", "\\1", basename(file))
+  df <- read.csv(file)
+  df$New_cellType <- cell_type
+  return(df)
+}) %>%
+  bind_rows()
+
+#log10 transformation for easier visualisation
+GO_files$log10_pval <- -log10(GO_files$p_value)
+
+
+GO_files_grouped <- GO_files %>%
+  group_by(New_cellType)
+#Optional: Filter for top n per cell type 
+top_20_GO_terms <- GO_files_grouped %>%
+  top_n(-20, p_value)
+
+
+##Plotting GO terms
+
+top_20_GO_by_cell_type <- ggplot(top_20_GO_terms, aes(x = New_cellType, y = reorder(term_name, log10_pval), size = intersection_size, color = log10_pval)) +
+  geom_point(alpha = 0.8) +
+  scale_color_viridis_c(option = "plasma", name = "-log10(p)") +
+  labs(
+    title = "Top 20 GO Enrichment Terms by Cell Type",
+    x = "Cell Type",
+    y = "GO Term",
+    size = "Gene Count"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.title.y = element_text(size = 10, lineheight = 1.2)) 
+
+ggsave("../outputs/GO_analysis/top_20_GO_by_celltype.png", top_20_GO_by_cell_type)
+
+```
+
+
+#### Question 2: Within the upregulated genes in each cell type, do upregulated macrocephaly genes have significantly enriched GO terms?
+
+```{r}
+output_dir <- "../data/GO_terms/GO_results_per_celltype_macro_specific"
+dir.create(output_dir, showWarnings = FALSE)
+
+for (celltype in sig_celltypes) {
+  cat("Running GO analysis for:", celltype)
+  
+  upreg_macro_genes_in_celltype <- macro_upreg_markers_updat$gene[macro_upreg_markers_updat$cluster == celltype]
+  
+  upreg_genes_in_celltype <- upreg_markers_updat$gene[upreg_markers_updat$cluster == celltype]
+  
+  GO_test_set <- gene_mapping_filtered[gene_mapping_filtered$gene_name %in% upreg_macro_genes_in_celltype, ]
+  GO_bkg_set <- gene_mapping_filtered[gene_mapping_filtered$gene_name %in% upreg_genes_in_celltype, ] #using the test set from pervious GO analysis as the background set for this one 
+  
+  upreg_GO_analysis_3 <- gost(GO_test_set$ensembl_id, organism = "mmusculus", exclude_iea = TRUE, correction_method = "bonferroni", sources = c("GO", "KEGG"), custom_bg = GO_bkg_set$ensembl_id, significant = TRUE, evcodes = TRUE)
+  
+  GO_result_df <- upreg_GO_analysis_3$result
+  GO_result_df$parents_str <- sapply(GO_result_df$parents, function (x) paste(x, collapse=","))
+  GO_result_df$parents <- NULL
+  GO_result_dfNew_cellType <- celltype 
+  
+  safe_name <- gsub(" ", "_", celltype)
+  write.csv(GO_result_df, file = file.path(output_dir, paste0("GO_terms_", safe_name, "_genes.csv")), row.names=FALSE)
+  
+  cat("Finished GO analysis for: ", celltype, "\n")
+}
+
+
+```
+
+#### Visualisation of GO Terms Across Cell Types 
+There are two types of visualisation we want to look at: 
+1. Visualisation of GO terms that are significant in both the initial upregulated GO analysis and this macrocephaly GO analysis -> If these GO terms have an increased enrichment in the macrocephaly-specific GO analysis, it would suggest that it is even MORE SIGNIFICANT to macrocephaly 
+
+2. Visualisation of GO terms that are just enriched in upregulated macrocephaly genes -> GO terms that are not present in the previous GO analysis but are flagged in this one suggests that these are SIGNIFICANT SPECIFIC to macrocephaly - a function that is uniquely enriched as a result of upregulated macrocephaly gene expression in that cell type 
+
+#### 1a. Visualisation of GO terms that are enriched in both GO Analysis
+```{r}
+results_dir <- "../data/GO_terms/GO_results_per_celltype_macro_specific"
+
+GO_files_macro <- list.files(results_dir, pattern = ".csv", full.names = TRUE)
+GO_files_macro <- lapply(GO_files_macro, function(file) {
+  #Extracting cell type from the csv file name and using it as a column
+  cell_type <- gsub("^GO_terms_(.*)_genes.csv", "\\1", basename(file))
+  df <- read.csv(file)
+  df$New_cellType <- cell_type
+  return(df)
+}) %>%
+  bind_rows()
+
+GO_files_macro$log10_pval <- -log10(GO_files_macro$p_value)
+
+
+##### For now, we will just focus on the GO:BP terms so 
+GO_files_macro_BP <- GO_files_macro[GO_files_macro$source == "GO:BP", ]
+GO_files_BP <- GO_files[GO_files$source == "GO:BP", ]
+
+
+GO_BP_shared <- intersect(GO_files_BP$term_id, GO_files_macro_BP$term_id) #Finding GO terms that are found in both datasets
+
+length(GO_BP_shared) #14 shared 
+
+
+#Plotting shared GO terms enrichment in each GO Analysis 
+
+#1. Shared GO terms significance values in All Upregulated Genes GO Analysis 
+GO_files_BP_shared_only <- GO_files_BP[GO_files_BP$term_id %in% GO_BP_shared, ]
+#There are 42 rows - when performing sum(duplicated(GO_files_BP_shared_analysis)) = 28. Some GO terms appear more than once thus appear in multiple different cell types 
+
+GO_BP_shared_ggplot <- ggplot(GO_files_BP_shared_only, aes(x = New_cellType, y = reorder(term_name, log10_pval), size = intersection_size, color = log10_pval)) +
+  geom_point(alpha = 0.8) +
+  scale_color_viridis_c(option = "plasma", name = "-log10(p)") +
+  labs(
+    title = "GO:BP Terms Enriched in Both Upregulated and \n Upregulated Macrocephaly Genes in Each Cell Type",
+    subtitle = "Fold Enrichment Values of GO:BP terms from the Upreg vs Non-upreg GO Analysis",
+    x = "Cell Type",
+    y = "GO Term",
+    size = "Gene Count"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.title.y = element_text(size = 10, lineheight = 1.2), axis.title = element_text(size = 10)) 
+
+ggsave("../outputs/GO_analysis/GO_BP_shared_upreg_vs_macro_upreg_by_cell_type.png", GO_BP_shared_ggplot)
+
+
+#2. Shared GO terms significance values in Upregulated Macrocephaly Genes GO Analysis 
+
+GO_files_macro_BP_shared_only <- GO_files_macro_BP[GO_files_macro_BP$term_id %in% GO_BP_shared, ] #19 entires - 5 duplicated e.g., GO:BP term GO:0009653 is duplicated but one is recorded in the DL_CPN and one in SCPN 
+
+GO_BP_shared_ggplot <- ggplot(GO_files_macro_BP_shared_only, aes(x = New_cellType, y = reorder(term_name, log10_pval), size = intersection_size, color = log10_pval)) +
+  geom_point(alpha = 0.8) +
+  scale_color_viridis_c(option = "plasma", name = "-log10(p)") +
+  labs(
+    title = "GO:BP Terms Enriched in Both Upregulated and Upregulated \n Macrocephaly Genes in Each Cell Type",
+    subtitle = "Fold Enrichment Values of GO:BP terms \n from the Upreg vs Macrocephaly Upreg GO Analysis",
+    x = "Cell Type",
+    y = "GO Term",
+    size = "Gene Count"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.title.y = element_text(size = 10, lineheight = 1.2), axis.title = element_text(size = 10), plot.title.position = "panel") 
+
+ggsave("../outputs/GO_analysis/GO_BP_shared_upreg_vs_macro_upreg_by_cell_type_2.png", GO_BP_shared_ggplot)
+
+
+
+
+#################### Hard to compare - same GO terms but are expressed in different cell types so its not a very unbiased comparison
+########### What if we narrow it to: same GO terms expressed in the SAME cell type 
+
+
+GO_BP_shared_same_celltype <- inner_join(
+  GO_files_BP_shared_only, 
+  GO_files_macro_BP_shared_only, 
+  by = c("term_id", "New_cellType"),
+  suffix = c("_all_upreg", "_macro_upreg")
+)
+
+#Reshape data first - combine log10_pval columns 
+library(tidyr)
+
+
+GO_BP_shared_long <- GO_BP_shared_same_celltype %>% 
+  pivot_longer(
+    cols = c(log10_pval_all_upreg, log10_pval_macro_upreg),
+    names_to = "Compare", 
+    values_to = "log10_pval"
+  ) %>% 
+  mutate(Compare = recode(Compare, log10_pval_all_upreg = "Upreg vs Non_Upreg", log10_pval_macro_upreg = "Macro_Upreg vs Upreg"))
+
+#Plot the-log10(p_val) across shared GO terms
+
+GO_BP_Shared_same_celltype_ggplot <- ggplot(GO_BP_shared_long, aes(x = New_cellType, y= term_name_all_upreg, colour = log10_pval, size = log10_pval)) + geom_point(alpha=0.8) +  scale_color_viridis_c(option = "plasma", name = "-log10(p)") + facet_wrap(~Compare) +
+  labs(
+    title = "GO:BP Terms Enriched in Both Upregulated and Upregulated \nMacrocephaly Genes in the Same Cell Types",
+    subtitle = "Fold Enrichment Values of GO:BP terms \nfrom both Upreg vs Non-Upreg and Macro-Upreg vs Upreg GO Analysis'",
+    x = "Cell Type",
+    y = "GO Term",
+    size = "-log10(p_val)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.title.y = element_text(size = 10, lineheight = 1.2), axis.title = element_text(size = 10), plot.title.position = "panel") 
+
+ggsave("../outputs/GO_analysis/GO_BP_shared_upreg_vs_macro_upreg_in_same_celltype.png", GO_BP_Shared_same_celltype_ggplot)
+
+  
+#Term names are the same so it doesn't really matter which one we use - > all(GO_BP_shared_long$term_name_all_upreg == GO_BP_shared_long$term_name_macro_upreg)
+#[1] TRUE  
+  
+
+```
+
+#### 1b. Visualisation of ALL TERMS Across Cell Types Enriched in Both GO Analysis - NEED TO DO 
+Rather than focusing on just GO:BP terms, focusing on all generated terms might provide greater insight and also might show up greater significance. 
+For this analysis, we will look at specific cell types and test for significant enriched terms in upregulated macrocephaly genes compared to enriched terms in upregulated genes
+
+```{r}
+#Identifying shared terms in same cell type 
+GO_shared_same_celltype <- inner_join(
+  GO_files, 
+  GO_files_macro, 
+  by = c("term_id", "New_cellType"),
+  suffix = c("_all_upreg", "_macro_upreg")
+)
+
+GO_shared_long <- GO_shared_same_celltype %>% 
+  pivot_longer(
+    cols = c(log10_pval_all_upreg, log10_pval_macro_upreg),
+    names_to = "Compare", 
+    values_to = "log10_pval"
+  ) %>% 
+  mutate(Compare = recode(Compare, log10_pval_all_upreg = "Upreg vs Non_Upreg", log10_pval_macro_upreg = "Macro_Upreg vs Upreg"))
+
+#Plot the-log10(p_val) across shared GO terms
+
+GO_shared_same_celltype_ggplot <- ggplot(GO_shared_long, aes(x = New_cellType, y= term_name_all_upreg, colour = log10_pval, size = NULL)) + geom_point(alpha=0.8) +  scale_color_viridis_c(option = "plasma", name = "-log10(p)") + facet_wrap(~Compare) +
+  labs(
+    title = "Terms Enriched in Both Upregulated and Upregulated \nMacrocephaly Genes in the Same Cell Types",
+    subtitle = "Fold Enrichment Values of terms \nfrom both Upreg vs Non-Upreg and Macro-Upreg vs Upreg GO Analysis'",
+    x = "Cell Type",
+    y = "GO Term",
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.title.y = element_text(size = 10, lineheight = 1.2), axis.title = element_text(size = 10), plot.title.position = "panel") 
+
+ggsave("../outputs/GO_analysis/ALL_shared_terms_upreg_vs_macro_upreg_in_same_celltype.png", GO_shared_same_celltype_ggplot)
+```
+
+
+#### 2. Visualisation of ALL TERMS enriched in JUST Upregulated Macrocephaly Genes - Need to try and cluster 
+```{r}
+terms_macro_specific <- GO_files_macro[!GO_files_macro$term_id %in% GO_files$term_id, ]
+
+
+macro_specific_ggplot <- ggplot(terms_macro_specific, aes(x= New_cellType, y=term_name, colour = log10_pval, size = intersection_size)) + facet_wrap(~source) + geom_point(alpha=0.8) +  scale_color_viridis_c(option = "plasma", name = "-log10(p)") + facet_wrap(~source) + labs (
+  title = "Terms Signficantly Enriched In Upregulated Macrocephaly Genes Only", 
+  subtitle = "Terms taken from Macro-Upreg vs Upreg GO Analysis", 
+  x= "Cell Type",
+  y= "Term Name", 
+  size = "Gene Count"
+) + 
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.title.y = element_text(size = 10, lineheight = 1.2), axis.title = element_text(size = 10), plot.title.position = "plot", plot.caption.position = "panel") 
+
+ggsave("../outputs/GO_analysis/GO_macro_specific_terms.png", macro_specific_ggplot)
+ggsave("../outputs/GO_analysis/GO_macro_specific_terms_with_sources.png") #For plot with facet_wrap (~source)
+
+
+```
+
+#### 3. Visualisation of ALL TERMS enriched in Non-Upreg vs Upreg Analysis Across Cell Types - NEED TO COMPLETE 
+
+```{r}
+GO_files_celltypes <- unique(GO_files$New_cellType)
+
+for (celltype in GO_files_celltypes) {
+  
+}
+
+
+```
+
+
+OPTIONAL: CALCULATE ODDS RATIOS OF EACH TERMS (can use term_size, query_sizes, intersection_sizes from GO_analysis$results and perform Fisher's Test)
+
+
+
+###2. Cell Types with significantly upregulated macrocephaly/malan/sotos (combined) genes
+#### Question 1: Are there GO terms that are significantly enriched in upregulated genes compared to non-upregulated genes in cell types?
+- We've performed the GO analysis for 7 out of the 9 cell types (7 were found to be enriched in both the macrocephaly only and combined enrichment analysis), so we can just do the remaining two which were found to be significantly enriched with the combined dataset genes: CThPN and Layer 4 
+```{r}
+sig_cell_types_macro <- read.csv("../data/sign_upreg_macro_genes_by_cell_type.csv")
+sig_celltypes_combined <- read.csv("../data/sign_upreg_macro_malan_sotos_genes_by_cell_type.csv")
+sig_celltypes_combined_unique <- unique(sig_celltypes_combined$cluster[!sig_celltypes_combined$cluster %in% sig_cell_types_macro$cluster]) #[1] "CThPN", "Layer 4"
+
+output_dir <- "../data/GO_terms/GO_results_per_celltype"
+
+Idents(seurat_subset_pc_only) <- "New_cellType"
+
+for (celltype in sig_celltypes_combined_unique){
+  cat("Running GO analysis for:", celltype)
+  
+  upreg_genes_in_celltype <- upreg_markers_updat$gene[upreg_markers_updat$cluster == celltype]
+  
+  #We need to get all genes specific to the cell type x
+  cells_in_type <- WhichCells(seurat_subset_pc_only, idents = celltype)
+  seurat_subset_celltype <- subset(seurat_subset_pc_only, cells = cells_in_type)
+  
+  GO_test_set <- gene_mapping_filtered[gene_mapping_filtered$gene_name %in% upreg_genes_in_celltype, ]
+  GO_bkg_set <- gene_mapping_filtered[gene_mapping_filtered$gene_name %in% rownames(seurat_subset_celltype), ]
+  
+  upreg_GO_analysis_2 <- gost(GO_test_set$ensembl_id, organism = "mmusculus", exclude_iea = TRUE, correction_method = "bonferroni", sources = c("GO", "KEGG"), custom_bg = GO_bkg_set$ensembl_id, significant = TRUE, evcodes = TRUE)
+  
+  GO_result_df <- upreg_GO_analysis_2$result
+  GO_result_df$parents_str <- sapply(GO_result_df$parents, function (x) paste(x, collapse=","))
+  GO_result_df$parents <- NULL
+  GO_result_dfNew_cellType <- celltype
+  
+  safe_name <- gsub(" ", "_", celltype)
+  write.csv(GO_result_df, file = file.path(output_dir, paste0("GO_terms_", safe_name, "_genes.csv")), row.names=FALSE)
+  
+  cat("Finished GO analysis for: ", celltype, "\n")
+}
+
+
+```
+
+#### Question 2: Within the upregulated genes in each cell type, do upregulated macrocephaly/malan/sotos genes have significantly enriched GO terms?
+
+```{r}
+sig_celltypes_combined <- unique(sig_celltypes_combined$cluster)
+
+output_dir <- "../data/GO_terms/GO_results_per_celltype_combined"
+dir.create(output_dir, showWarnings = FALSE)
+
+for (celltype in sig_celltypes_combined) {
+  cat("Running GO analysis for:", celltype)
+  
+  upreg_combined_genes_in_celltype <- combined_upreg_genes$gene[combined_upreg_genes$cluster == celltype]
+  
+  upreg_genes_in_celltype <- upreg_markers_updat$gene[upreg_markers_updat$cluster == celltype]
+  
+  GO_test_set <- gene_mapping_filtered[gene_mapping_filtered$gene_name %in% upreg_combined_genes_in_celltype, ]
+  GO_bkg_set <- gene_mapping_filtered[gene_mapping_filtered$gene_name %in% upreg_genes_in_celltype, ] #using the test set from pervious GO analysis as the background set for this one 
+  
+  upreg_GO_analysis_3 <- gost(GO_test_set$ensembl_id, organism = "mmusculus", exclude_iea = TRUE, correction_method = "bonferroni", sources = c("GO", "KEGG"), custom_bg = GO_bkg_set$ensembl_id, significant = TRUE, evcodes = TRUE)
+  
+  GO_result_df <- upreg_GO_analysis_3$result
+  GO_result_df$parents_str <- sapply(GO_result_df$parents, function (x) paste(x, collapse=","))
+  GO_result_df$parents <- NULL
+  GO_result_dfNew_cellType <- celltype 
+  
+  safe_name <- gsub(" ", "_", celltype)
+  write.csv(GO_result_df, file = file.path(output_dir, paste0("GO_terms_", safe_name, "_genes.csv")), row.names=FALSE)
+  
+  cat("Finished GO analysis for: ", celltype, "\n")
+}
+
+
+
+```
+
+```{r}
+#Trying to also get non_significant p_value recordings 
+
+output_dir <- "../data/GO_terms/GO_results_per_celltype_combined_with_uncorrected_pvalues"
+dir.create(output_dir, showWarnings = FALSE)
+
+for (celltype in sig_celltypes_combined) {
+  cat("Running GO analysis for:", celltype)
+  
+  upreg_combined_genes_in_celltype <- combined_upreg_genes$gene[combined_upreg_genes$cluster == celltype]
+  
+  upreg_genes_in_celltype <- upreg_markers_updat$gene[upreg_markers_updat$cluster == celltype]
+  
+  GO_test_set <- gene_mapping_filtered[gene_mapping_filtered$gene_name %in% upreg_combined_genes_in_celltype, ]
+  GO_bkg_set <- gene_mapping_filtered[gene_mapping_filtered$gene_name %in% upreg_genes_in_celltype, ] #using the test set from previous GO analysis as the background set for this one 
+  
+  upreg_GO_analysis_3a <- gost(GO_test_set$ensembl_id, organism = "mmusculus", exclude_iea = TRUE, sources = c("GO", "KEGG"), custom_bg = GO_bkg_set$ensembl_id, significant = FALSE, evcodes = TRUE) #correction_method = "bonferroni"
+  
+  GO_result_df <- upreg_GO_analysis_3a$result
+  GO_result_df$parents_str <- sapply(GO_result_df$parents, function (x) paste(x, collapse=","))
+  GO_result_df$parents <- NULL
+  GO_result_dfNew_cellType <- celltype 
+  
+  safe_name <- gsub(" ", "_", celltype)
+  write.csv(GO_result_df, file = file.path(output_dir, paste0("GO_terms_", safe_name, "_genes.csv")), row.names=FALSE)
+  
+  cat("Finished GO analysis for: ", celltype, "\n")
+}
+
+
+
+```
+
+
+
+
+
+#### Visualisation across Cell Types
+
+```{r}
+
+#Loading in the two GO results 
+#1. Upreg vs Non-Upreg
+results_dir_2 <- "../data/GO_terms/GO_results_per_celltype"
+
+GO_files_updat <- list.files(results_dir_2, pattern = ".csv", full.names = TRUE)
+GO_files_updat <- lapply(GO_files_updat, function(file) {
+  #Extracting cell type from the csv file name and using it as a column
+  cell_type <- gsub("^GO_terms_(.*)_genes.csv", "\\1", basename(file))
+  df <- read.csv(file)
+  df$New_cellType <- cell_type
+  return(df)
+}) %>%
+  bind_rows()
+
+#log10 transformation for easier visualisation 
+GO_files_updat$log10_pval <- -log10(GO_files_updat$p_value)
+
+
+
+#2. Macro Upreg vs Upreg
+results_dir_2 <- "../data/GO_terms/GO_results_per_celltype_combined"
+
+GO_files_combined <- list.files(results_dir_2, pattern = ".csv", full.names = TRUE)
+GO_files_combined <- lapply(GO_files_combined, function(file) {
+  #Extracting cell type from the csv file name and using it as a column
+  cell_type <- gsub("^GO_terms_(.*)_genes.csv", "\\1", basename(file))
+  df <- read.csv(file)
+  df$New_cellType <- cell_type
+  return(df)
+}) %>%
+  bind_rows()
+GO_files_combined$log10_pval <- -log10(GO_files_combined$p_value)
+
+```
+
+
+#### 1. Visualisation of ALL TERMS enriched Across Cell Types in BOTH GO Analysis 
+```{r}
+#Same method as seen in 1b
+
+GO_combined_shared_same_celltype <- inner_join(
+  GO_files_updat, 
+  GO_files_combined,
+  by = c("term_id", "New_cellType"),
+  suffix = c("_all_upreg", "_combined_upreg")
+)
+
+GO_combined_shared_long <- GO_combined_shared_same_celltype %>% 
+  pivot_longer(
+    cols = c(log10_pval_all_upreg, log10_pval_combined_upreg),
+    names_to = "Compare", 
+    values_to = "log10_pval"
+  ) %>% 
+  mutate(Compare = recode(Compare, log10_pval_all_upreg = "Upreg vs Non_Upreg", log10_pval_combined_upreg = "Macro/Malan/Sotos_Upreg vs Upreg"))
+
+#Plot the-log10(p_val) across shared GO terms
+
+GO_combined_shared_same_celltype_ggplot <- ggplot(GO_combined_shared_long, aes(x = New_cellType, y= term_name_all_upreg, colour = log10_pval, size = NULL)) + geom_point(alpha=0.8) +  scale_color_viridis_c(option = "plasma", name = "-log10(p)") + facet_wrap(~Compare) +
+  labs(
+    title = "Terms Enriched in Both Upregulated and Upregulated \nMacrocephaly/Malan/Sotos Genes in the Same Cell Types",
+    subtitle = "Fold Enrichment Values of terms \nfrom both Upreg vs Non-Upreg and Macro/Malan/Sotos-Upreg vs Upreg GO Analysis'",
+    x = "Cell Type",
+    y = "GO Term",
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.title.y = element_text(size = 10, lineheight = 1.2), axis.title = element_text(size = 10), plot.title.position = "panel") 
+
+ggsave("../outputs/GO_analysis/ALL_shared_terms_upreg_vs_combined_upreg_in_same_celltype.png", GO_combined_shared_same_celltype_ggplot)
+
+
+```
+
+
+
+#### 2. Visualisation of ALL TERMS enriched in JUST the COMBINED genes 
+```{r}
+terms_combined_specific <- GO_files_combined[!GO_files_combined$term_id %in% GO_files_updat$term_id, ]
+
+
+combined_specific_ggplot <- ggplot(terms_combined_specific, aes(x= New_cellType, y=term_name, colour = log10_pval, size = intersection_size)) + geom_point(alpha=0.8) +  scale_color_viridis_c(option = "plasma", name = "-log10(p)") + labs (
+  title = "Terms Signficantly Enriched In Upregulated Macrocephaly/Malan/Sotos Genes Only", 
+  subtitle = "Terms taken from Combined Genes-Upreg vs Upreg GO Analysis", 
+  x= "Cell Type",
+  y= "Term Name", 
+  size = "Gene Count"
+) + 
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.title.y = element_text(size = 10, lineheight = 1.2), axis.title = element_text(size = 10), plot.title.position = "plot", plot.caption.position = "panel")
+
+ggsave("../outputs/GO_analysis/GO_combined_specific_terms_with_sources.png", combined_specific_ggplot)
+ggsave("../outputs/GO_analysis/GO_combined_specific_terms.png", combined_specific_ggplot)
+
+
+#### Trying to group by common GO term names 
+
+#First creating group terms 
+
+grouped_terms <- terms_combined_specific %>%
+  mutate(category = case_when(
+    grepl("morphogenesis", term_name, ignore.case = TRUE) ~ "morphogenesis",
+    grepl("cell fate|specification", term_name, ignore.case = TRUE) ~ "specification",
+    grepl("patterning", term_name, ignore.case = TRUE) ~ "patterning",
+    grepl("signaling", term_name, ignore.case = TRUE) ~ "signaling",
+    grepl("cancer|carcinoma|leukemia|melanoma", term_name, ignore.case = TRUE) ~ "cancer",
+    grepl("infection|virus", term_name, ignore.case = TRUE) ~ "immune / infection",
+    grepl("differentiation", term_name, ignore.case = TRUE) ~ "differentiation",
+    TRUE ~ "Other"
+  ))
+
+grouped_terms$term_name <- factor(grouped_terms$term_name, levels = unique(grouped_terms$term_name[order(grouped_terms$category)]))
+
+# Plot grouped by category
+grouped_terms_ggplot <- ggplot(grouped_terms, aes(x = New_cellType, y = term_name)) +
+  geom_point(aes(size = intersection_size, color = -log10_pval)) +
+  scale_color_viridis_c(option = "plasma", name = "-log10(p)")+
+  theme_minimal(base_size = 12) +
+  facet_grid(category ~ ., scales = "free_y", space = "free_y") +  # vertically stacked
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text.y = element_text(angle = 0, size = 15),
+    plot.title.position = "plot"
+  ) +
+  labs(
+    title = "Grouped Enrichment of Macrocephaly/Malan/Sotos Genes by Functional Category",
+    y = "GO Term",
+    x = "Cell Type"
+  )
+```
+
+
+#### 3. Visualisation of ALL TERMS enriched in Non-Upreg vs Upreg 
+```{r}
+install.packages("ggtext")
+library(ggtext)
+
+```
+
+```{r}
+
+GO_files_updat_celltypes <- unique(GO_files_updat$New_cellType)
+output_dir <- "../outputs/GO_analysis/ALL_terms_for_non_upreg_vs_upreg_combined"
+dir.create(output_dir)
+
+for (celltype in GO_files_updat_celltypes) {
+  GO_files_updat_filter <- subset(GO_files_updat, New_cellType == celltype)
+  
+  GO_files_updat_ggplot <- ggplot(GO_files_updat_filter, aes(x=celltype, y= term_name, colour = log10_pval, size = intersection_size)) + geom_point(alpha=0.8) +  scale_color_viridis_c(option = "plasma", name = "-log10(p)") + facet_wrap(~source, scales = "free_y") +
+  labs(
+    title = paste("Terms Enriched in Upregulated Genes in ", celltype), 
+    subtitle = "Fold Enrichment Values of terms \nfrom Upreg vs Non-Upreg GO Analysis",
+    x = "Cell Type",
+    y = "GO Term",
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.title.y = element_text(size = 10, lineheight = 1.2), axis.title = element_text(size = 10), axis.text.y = ggtext::element_markdown(lineheight = 5, size =7), plot.title.position = "plot") 
+  
+  safe_name <- gsub(" ", "_", celltype)
+  ggsave(filename = file.path(output_dir, paste0("ALL_terms_in_", safe_name, "_upreg_vs_non_upreg.png")), GO_files_updat_ggplot, bg = "white", width = 866, height = 576, units = "px")
+  
+  cat("Finished GO dotplot for: ", celltype, "\n")
+}
+
+
+```
+
+
+
+
+
+#### 4. Trying to Map Terms to Genes 
+All terms should have ENSMUSG ID's that are flagged with them - can try plotting these per cell type to see if we can identify potential enriched genes
+
+```{r}
+library(stringr)
+
+terms_combined_specific$gene_names <- sapply(terms_combined_specific$intersection, function(x){
+  ids <- str_split(x, ",")[[1]]
+  names <- gene_mapping_filtered$gene_name[match(ids, gene_mapping_filtered$ensembl_id)]
+  paste(na.omit(names), collapse = ",")
+})
+
+head(terms_combined_specific$gene_names)
+#[1] "Gli2,Smo,Gli3"                  "Gli2,Smo,Ift122,Gli3,Ptch1"     "Gli2,Smo,Ift122,Gli3,Ptch1"    
+#[4] "Gli2,Nfia,Smo,Fgfr1,Gli3,Ptch1" "Gli2,Smo,Ift122,Gli3"           "Gli2,Smo,Ift122,Gli3"
+
+####### First try with plotting for Astrocytes 
+terms_combined_specific_astro <- subset(terms_combined_specific, New_cellType == "Astrocytes")
+combined_enriched_gene_names <- ggplot(terms_combined_specific_astro, aes(x= gene_names, y=term_name, colour = log10_pval, size = intersection_size)) + facet_wrap(~source) + geom_point(alpha=0.8) +  scale_color_viridis_c(option = "plasma", name = "-log10(p)") + labs (
+  title = "Terms Significantly Enriched i", 
+  subtitle = "Terms taken from Combined Genes-Upreg vs Upreg GO Analysis", 
+  x= "Flagged Gene Names",
+  y= "Term Name Enriched In Astrocytes", 
+  size = "Gene Count"
+) + 
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.title.y = element_text(size = 10, lineheight = 1.2), axis.title = element_text(size = 10), plot.title.position = "plot", plot.caption.position = "panel")
+
+
+
+##### Plotting for CThPN 
+terms_combined_specific_CThPN <- subset(terms_combined_specific, New_cellType == "CThPN")
+combined_enriched_gene_names <- ggplot(terms_combined_specific_CThPN, aes(x= gene_names, y=term_name, colour = log10_pval, size = intersection_size)) + facet_wrap(~source) + geom_point(alpha=0.8) +  scale_color_viridis_c(option = "plasma", name = "-log10(p)") + labs (
+  title = "Terms Significantly Enriched i", 
+  subtitle = "Terms taken from Combined Genes-Upreg vs Upreg GO Analysis", 
+  x= "Flagged Gene Names",
+  y= "Term Name Enriched In Astrocytes", 
+  size = "Gene Count"
+) + 
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.title.y = element_text(size = 10, lineheight = 1.2), axis.title = element_text(size = 10), plot.title.position = "plot", plot.caption.position = "panel")
+
+```
+
+-   simplfyEnrichment does not take into enrichment signal strength - may miss biologically significant results. There are some better alternatives:
+
+    -   GOSemSim
+
+    -   clusterProfiler
+
+#### clusterProfiler 
+
+```{r}
+BiocManager::install("clusterProfiler")
+library("clusterProfiler")
+```
+
+#### GOSemSim 
+
+```{r}
+BiocManager::install("GOSemSim")
+library(GOSemSim)
+```
+
+```{r}
+sim_matrix <- mgoSim(GO_terms_tester_IDs, GO_terms_tester_IDs, semData = godata(annoDb = "org.Hs.eg.db", ont = "BP"), measure = "Resnik", combine = "BMA") #Best match average method 
+
+#For clustering of functional groups 
+sim_matrix_dist <- 1- sim_matrix
+
+#Hierarchical clustering 
+hc <- hclust(as.dist(sim_matrix_dist), method = "ward.D2")
+clusters <- cutree(hc, k=10) #k-means 10 for now 
+```

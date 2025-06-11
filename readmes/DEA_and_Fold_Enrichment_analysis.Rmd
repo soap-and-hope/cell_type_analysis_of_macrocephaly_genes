@@ -1,0 +1,372 @@
+---
+title: "DEA_and_Fold_Enrichment"
+output: html_document
+date: "2025-05-29"
+---
+## Loading in data 
+
+Loading in the two separate OMIM datasets:
+
+1.  General macrocephaly genes
+2.  Other brain enlargement disorders - Sotos and Malan syndrome
+
+```{r}
+
+seurat_subset_cleaned <- qread("../data/seurat_subset_cleaned.qs")
+View(seurat_subset_cleaned)
+
+#Loading in dataset
+OMIM_dat <- read.delim("../data/OMIM_Databases_Gene_Map_Queries/cleaned OMIM_data_macro.tsv", sep="\t", na="NA")
+View(OMIM_dat)
+print(rownames(seurat_subset_cleaned))
+extracting_genes <- intersect(rownames(seurat_subset_cleaned), OMIM_dat$Mouse.Gene..from.MGI.) #Don't need to convert anything - we had a whole column for it - 175 genes
+View(extracting_genes)
+print(extracting_genes)
+
+#Loading in second OMIM dataset 
+OMIM_dat_2 <- read.delim("../data/OMIM_Databases_Gene_Map_Queries/cleaned_OMIM_data_MALAN_SOTOS.tsv", sep = "\t", na = "NA")
+head(OMIM_dat_2)
+
+malan_sotos_genes <- intersect(rownames(seurat_subset_cleaned), OMIM_dat_2$Mouse.Gene..from.MGI.)
+View(malan_sotos_genes)
+View(malan_sotos_genes)
+```
+
+## Finding Differentially Expressed Cluster biomarkers (DEGs)
+
+**Can use the FindMarkers functions in Seurat and do it for all clusters i.e., all cell types**
+
+```{r}
+install.packages("BiocManager")
+library(BiocManager)
+BiocManager::install("DESeq2")
+library(DESeq2) ##This isn't working for some reason 
+
+#For more efficient wilcox DEA - suggested by devs
+install.packages('devtools')      ##NEED TO INSTALL 
+library('devtools')
+devtools::install_github("immunogenomics/presto")
+
+DefaultAssay(seurat_subset_cleaned)
+
+intersect(rownames(seurat_subset_cleaned), extracting_genes) #All 175 macrocephaly genes have a counts matrix in the seurat obj
+
+find_DEGs <- FindAllMarkers(seurat_subset_cleaned, group.by = "New_cellType", logfc.threshold = 0.25, test.use = "wilcox", slot = "data", verbose = TRUE, random.seed = 42) #USE DESeq2 so slot is set to counts 
+#Performed on z-score data 
+#Need to check if I need to run Bonferroni correction - Yes 
+#Also might need to filter the number of clusters - have some clusters that we don't want to include e.g., doublet, low count etc.... should probably still include all other ones as we don't want to look biased towards early neuronal cells 
+head(find_DEGs)
+
+##### More refined DEG and clustering - Perform on groups of cell types - Need to ask which cell types to keep/cluster with
+
+```
+
+##### Saving DEG file 
+
+```{r}
+#Saving DEG file
+write.csv(find_DEGs, "../data/FindAllMarkers_DEG.csv")
+
+```
+
+
+## Identifying which genes are up + downregulated
+
+**NB: Positive avg_log2FC values means upregulated and vice versa**
+
+```{r}
+library(dplyr)
+library(ggplot2)
+upreg_markers <- find_DEGs[find_DEGs$avg_log2FC>0 & find_DEGs$p_val_adj<0.05, ]
+downreg_markers <- find_DEGs[find_DEGs$avg_log2FC<0 & find_DEGs$p_val_adj<0.05, ]
+
+upreg_markers <- as.data.frame(upreg_markers)
+downreg_markers <- as.data.frame(downreg_markers)
+
+#Work on fixing this bar plot so see the number of upreg genes per celltype (also do one for Cell_ID to Cell Type)
+
+#Generating a basic bar plot to visualize number of upregulated genes in each cell type (cluster)
+upreg_bar_plot <- ggplot(upreg_markers, aes(x=cluster, y=sum(gene))) + geom_bar(stat = "identity") + coord_flip() + labs(x= "Cell Type Cluster", y="Number of Genes") #Fix it to make it gene counts 
+
+print(upreg_bar_plot)
+ggsave("upreg_bar_chart_test.png", upreg_bar_plot)
+
+
+### Seeing top 20 upregulated markers in each cell type
+top_upreg_markers_by_cluster <- upreg_markers %>%
+  top_n(n = 20, wt = avg_log2FC) %>%
+  pull(gene)
+
+
+upreg_plot <- FeaturePlot(seurat_subset_cleaned, features = top_upreg_markers_by_cluster, reduction = "umap", ncol = 4, pt.size = 1.5, order = TRUE)
+print(upreg_plot)
+ggsave("top_20_upreg_markers_umap.png", upreg_plot, width = 20, height = 25)
+
+upreg_dotplot <- DotPlot(seurat_subset_cleaned, features = top_upreg_markers_by_cluster, group.by = "New_cellType") + coord_flip() + labs(x = "Genes", y = "Cell Type")
+ggsave("top_20_upreg_markers_dotplot.png", upreg_dotplot, width = 30, height = 15, bg = "white")
+
+
+```
+
+```{r}
+test_DEG_Plot <- FeaturePlot(seurat_subset_cleaned, features = extracting_genes)
+print(test_DEG_Plot)
+ggsave("Test_DEG_UMAP_Plot.png", test_DEG_Plot, height = 12, width = 12)
+ggsave("All_data_DEG_test.png", test_DEG_Plot)
+
+```
+
+#### 1. Identifying Upregulated Macrocephaly Genes 
+
+```{r}
+##### Now to check top upregulated macrocephaly genes 
+macro_upreg_markers <- intersect(extracting_genes, upreg_markers$gene)
+print(length(macro_upreg_markers)) #161 of 175 macro genes were found to be differentially upregulated
+
+macro_upreg_markers <- subset(upreg_markers, upreg_markers$gene %in% macro_upreg_markers)
+View(macro_upreg_markers)
+print(length(unique(macro_upreg_markers$gene))) #[1] 161 
+
+top_upreg_macro_markers_by_cluster <- macro_upreg_markers %>%
+  arrange(desc(avg_log2FC)) %>% #Previously used top_n but that doesn't handle duplicates very well - was getting an error about duplicates later on when trying to plot the dotplot 
+  distinct(gene, .keep_all = TRUE) %>%
+  slice_head(n = 20) %>%
+  pull(gene)
+
+top_upreg_macro_markers_with_data <- macro_upreg_markers %>%
+  arrange(desc(avg_log2FC)) %>%
+  distinct(gene, .keep_all = TRUE) %>%
+  slice_head(n=20) #Not just gene names as a character variable which is what is stored when you use pull(gene)
+  
+upreg_macro_plot <- FeaturePlot(seurat_subset_cleaned, features = top_upreg_macro_markers_by_cluster, reduction = "umap", ncol = 4, pt.size = 1.5, order = TRUE)
+print(upreg_plot)
+ggsave("top_20_upreg_macro_markers_umap_without_duplicates.png", upreg_macro_plot, width = 20, height = 25)
+
+duplicated_top_upreg_macro_markers <- subset(top_upreg_macro_markers_by_cluster, duplicated(top_upreg_macro_markers_by_cluster))
+print(duplicated_top_upreg_macro_markers)
+
+upreg_dotplot <- DotPlot(seurat_subset_cleaned, features = top_upreg_macro_markers_with_data, group.by = "New_cellType") + coord_flip() + labs(x = "Genes", y = "Cell Type") + scale_color_gradient(low = "lightgrey", mid = "skyblue", high = "navy", midpoint = median(top_upreg_macro_markers_with_data$avg_log2FC))
+ggsave("top_20_upreg_macro_markers_dotplot_without_duplicates.png", upreg_dotplot, width = 30, height = 15, bg = "white")
+```
+
+#### 2. Identifying Upregulated Malan/Sotos Macrocephaly Genes 
+
+```{r}
+upreg_malan_sotos_genes <- intersect(malan_sotos_genes, upreg_markers$gene) #13 upregulated 
+upreg_malan_sotos_genes <- subset(upreg_markers, upreg_markers$gene %in% upreg_malan_sotos_genes)
+View(upreg_malan_sotos_genes)
+non_malan_sotos_upreg_genes <- upreg_markers[!upreg_markers$gene %in% upreg_malan_sotos_genes$gene, ]
+
+```
+
+## Gene Enrichment Analysis - Fisher's Exact Test
+
+#### 1. Enrichment Analysis of Macrocephaly Genes
+
+##### a. Upregulated Macrocephaly Genes in Apical Progenitors
+
+```{r}
+## Testing for significance of upregulated genes using adj_p_value 
+
+#Ultimately want to confirm if the proportion of upregulated macrocephaly DEGs is significantly more in Apical Progenitors compared to the overall DEGs dataset 
+non_macro_upreg_markers <- upreg_markers[!upreg_markers$gene %in% macro_upreg_markers$gene, ]
+View(non_macro_upreg_markers)
+
+#1. Making a Contingency Table
+n1 <- sum(macro_upreg_markers$cluster == "Apical progenitors") #[1] 53 
+n2 <- sum(non_macro_upreg_markers$cluster == "Apical progenitors") #[1] 4347
+
+#Can chck thats all the upregulated markers in Apical progenitors doing:
+print(sum(upreg_markers$cluster == "Apical progenitors")) #[1] 4400 - which is the total if you add up n1 + n2 => its correct 
+
+print(length(unique(rownames(seurat_subset_cleaned)))) #[1] 27,998
+
+n3 <- (175-53) #[1] 122
+n4 <- (27998-(122+53+4347)) #[1] 23476
+      
+    
+contingency_table <- matrix(
+  c(n1,n2,n3,n4), nrow =2)
+
+fisher_test <- fisher.test(contingency_table, alternative = "greater")
+fisher_two_tailed <- fisher.test(contingency_table, alternative = "two.sided")
+
+```
+
+##### b. Creating a For Loop to save time - Checking across all Cell Types
+
+Running both one-tailed and two-tailed. With two-tailed we can see if any macrocephaly genes are significantly depleted in specific cell types
+
+```{r}
+#All cell types 
+cell_types <- unique(upreg_markers$cluster)
+
+#Total number of genes that were tested 
+total_genes <- length(unique(rownames(seurat_subset_cleaned)))
+
+#Create a results table 
+fishers_results_table <- data.frame(
+  New_cellType = character(),
+  odds_ratio = numeric(),
+  p_val_one_sided <- numeric(),
+  p_val_two_sided <- numeric(),
+  stringsAsFactors = FALSE
+)
+
+
+for (cell_type in cell_types) {
+  n1 <- sum(macro_upreg_markers$cluster == cell_type)
+  n2 <- sum(non_macro_upreg_markers$cluster == cell_type)
+  
+  #To check that it has been calculated correctly 
+  total_upreg_in_cell_type <- sum(upreg_markers$cluster == cell_type)
+  if (n1+n2 != total_upreg_in_cell_type) {
+    warning(paste("Calculation mismatch for ", cell_type))
+  } else {
+    paste("Correctly calculated for ", cell_type, "\n")
+  }
+  
+  n3 <- (175 - n1)
+  n4 <- (27998 - (n1 + n2 + n3))
+  
+  contingency_table <- matrix(
+  c(n1,n2,n3,n4), nrow =2)
+  
+  fisher_one_tailed <- fisher.test(contingency_table, alternative = "greater")
+  fisher_two_tailed <- fisher.test(contingency_table, alternative = "two.sided")
+  
+  fishers_results_table <- rbind(fishers_results_table, data.frame(
+    New_cellType = cell_type,
+    odds_ratio <- fisher_one_tailed$estimate,
+    p_val_one_sided = fisher_one_tailed$p.value,
+    p_val_two_sided = fisher_two_tailed$p.value
+  ))
+  
+  cat("Processed:", cell_type, "- Odds Ratio:", round(fisher_one_tailed$estimate, 2), 
+      "- P-value:", format.pval(fisher_one_tailed$p.value, digits = 3), "\n")
+}
+
+```
+
+```{r}
+head(fishers_results_table)
+```
+```{r}
+write.csv(fishers_results_table, "../data/Fishers_Enrichment_Test/fishers_1+2_tailed_UPREG.csv", row.names = FALSE)
+```
+
+#### 2. Enrichment Analysis of Malan/Sotos Genes
+
+```{r}
+#All cell types 
+cell_types <- unique(upreg_markers$cluster)
+
+#Total number of genes that were tested 
+total_genes <- length(unique(rownames(seurat_subset_cleaned)))
+
+#Create a results table 
+fishers_results_table <- data.frame(
+  New_cellType = character(),
+  odds_ratio = numeric(),
+  p_val_one_sided <- numeric(),
+  p_val_two_sided <- numeric(),
+  stringsAsFactors = FALSE
+)
+
+
+for (cell_type in cell_types) {
+  n1 <- sum(upreg_malan_sotos_genes$cluster == cell_type)
+  n2 <- sum(non_malan_sotos_upreg_genes$cluster == cell_type)
+  
+  #To check that it has been calculated correctly 
+  total_upreg_in_cell_type <- sum(upreg_markers$cluster == cell_type)
+  if (n1+n2 != total_upreg_in_cell_type) {
+    warning(paste("Calculation mismatch for ", cell_type))
+  } else {
+    paste("Correctly calculated for ", cell_type, "\n")
+  }
+  
+  n3 <- (13 - n1)
+  n4 <- (27998 - (n1 + n2 + n3))
+  
+  contingency_table <- matrix(
+  c(n1,n2,n3,n4), nrow =2)
+  
+  fisher_one_tailed <- fisher.test(contingency_table, alternative = "greater")
+  fisher_two_tailed <- fisher.test(contingency_table, alternative = "two.sided")
+  
+  fishers_results_table <- rbind(fishers_results_table, data.frame(
+    New_cellType = cell_type,
+    odds_ratio <- fisher_one_tailed$estimate,
+    p_val_one_sided = fisher_one_tailed$p.value,
+    p_val_two_sided = fisher_two_tailed$p.value
+  ))
+  
+  cat("Processed:", cell_type, "- Odds Ratio:", round(fisher_one_tailed$estimate, 2), 
+      "- P-value:", format.pval(fisher_one_tailed$p.value, digits = 3), "\n")
+}
+```
+
+```{r}
+write.csv(fishers_results_table, "../data/Fishers_Enrichment_Test/fishers_1+2_tailed_UPREG_malan_sotos.csv", row.names = FALSE)
+```
+
+## Fold Enrichment Analysis
+
+#### 1. Enrichment Analysis of Macrocephaly Genes
+
+```{r}
+fishers_results_table <- read.csv("../data/Fishers_Enrichment_Test/fishers_1+2_tailed_UPREG.csv")
+#Performing log transformation (Log2) - i.e, up or down, for easier visualization especially because we are dealing with really small values
+#Adding a log2(odds_ratio) column to the results table 
+fishers_results_table$log2_odds_ratio <- log2(fishers_results_table$odds_ratio....fisher_one_tailed.estimate)
+
+
+
+#Plotting a Heatmap 
+fold_enrichment_heatmap <- ggplot(fishers_results_table) + geom_tile(aes(x= New_cellType, y = factor(1), fill = log2_odds_ratio)) +  scale_fill_gradientn(colors = colorRampPalette(brewer.pal(5, "RdPu"))(100),
+                      name = "Fold Enrichment") + theme_minimal()
+
+ggsave("fold_enrichment_heatmap_ggplot.png", fold_enrichment_heatmap, bg = "white", height = 15, width = 20)
+
+results_table$odds_ratio....fisher_one_tailed.estimate
+
+###Making a bubble plot 
+
+results_table <- fishers_results_table %>%
+  mutate(
+    log2_odds_ratio = log2(odds_ratio....fisher_one_tailed.estimate),
+    neg_log10_pval = -log10(p_val_one_sided), #Minus log10 transformation 
+    significant = p_val_one_sided < 0.05 
+  )
+
+fold_enrichment_bubble_plot <- ggplot(results_table, aes(x= reorder(New_cellType, odds_ratio....fisher_one_tailed.estimate), y = log2_odds_ratio)) + geom_point(aes(size = neg_log10_pval, color = significant)) + scale_color_manual(values = c("FALSE" = "grey30", "TRUE" = "deeppink3")) + scale_size_continuous(range = c(1,10)) + coord_flip() + labs( x = "Cell Type", y = "Fold Enrichment", size = "-log10(p-value)", color = "Significant") + theme_minimal() + theme(axis.text.y = element_text(size=10), legend.position = "right", panel.background = element_rect(fill = "white", color = NA), plot.background = element_rect(fill = "white", color = NA)) 
+
+ggsave("../outputs/fold_enrichment/fold_enrichment_UPREG_bubbleplot_ggplot.png", fold_enrichment_bubble_plot, height = 15, width = 15)
+
+```
+
+#### 2. Enrichment Analysis of Malan/Sotos Genes 
+
+```{r}
+fishers_results_table_sotos_malan <- read.csv("../data/Fishers_Enrichment_Test/fishers_1+2_tailed_UPREG_malan_sotos.csv")
+#Performing log transformation (Log2) - i.e, up or down, for easier visualization especially because we are dealing with really small values
+#Adding a log2(odds_ratio) column to the results table 
+fishers_results_table_sotos_malan$log2_odds_ratio <- log2(fishers_results_table_sotos_malan$odds_ratio....fisher_one_tailed.estimate)
+
+
+###Making a bubble plot 
+
+results_table_malan_sotos <- fishers_results_table_sotos_malan %>%
+  mutate(
+    log2_odds_ratio = log2(odds_ratio....fisher_one_tailed.estimate),
+    neg_log10_pval = -log10(p_val_one_sided), #Minus log10 transformation 
+    significant = p_val_one_sided < 0.05 
+  )
+
+fold_enrichment_bubble_plot <- ggplot(results_table_malan_sotos, aes(x= reorder(New_cellType, odds_ratio....fisher_one_tailed.estimate), y = log2_odds_ratio)) + geom_point(aes(size = neg_log10_pval, color = significant)) + scale_color_manual(values = c("FALSE" = "grey30", "TRUE" = "deeppink3")) + scale_size_continuous(range = c(1,10)) + coord_flip() + labs( x = "Cell Type", y = "Fold Enrichment", size = "-log10(p-value)", color = "Significant") + theme_minimal() + theme(axis.text.y = element_text(size=10), legend.position = "right", panel.background = element_rect(fill = "white", color = NA), plot.background = element_rect(fill = "white", color = NA)) 
+
+ggsave("../outputs/fold_enrichment/fold_enrichment_UPREG_bubbleplot_ggplot_malan_sotos.png", fold_enrichment_bubble_plot, height = 15, width = 15)
+```
+
+

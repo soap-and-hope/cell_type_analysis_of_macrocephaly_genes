@@ -1,0 +1,152 @@
+---
+title: "OMIM_Dataset_Final"
+output: html_document
+date: "2025-03-09"
+---
+
+## Loading two OMIM tsv files
+
+-   **One file is a dataset that was generated using the search term 'macrocephaly' and the second one is one that was generated using the search term 'macrocephaly, NE-RG transition'**
+-   **For all downstream cleaning, I only applied it to the 'macrocephaly' dataset**
+
+```{r}
+getwd()
+
+##Loading in OMIM table queried by 'macrocephaly'
+OMIM_dat <- read.delim("OMIM_Databases_Gene_Map_Queries/OMIM-Gene-Map-Retrieval.tsv", header = TRUE, sep = "\t", check.names = TRUE, skip =3)
+View(OMIM_dat)
+dim(OMIM_dat) #[1] 376 14 - 376 entries 
+```
+
+```{r}
+##Loading in OMIM table queried by 'macrocephaly, NE-RG transition'
+OMIM_dat_NE_RG <- read.delim("OMIM_Databases_Gene_Map_Queries/OMIM-Gene-Map-Retrieval-NE-RG.tsv", header =TRUE, sep="\t", check.names = TRUE, skip =3)
+View(OMIM_dat_NE_RG)
+dim(OMIM_dat_NE_RG) #[1] 307 14 - 307 entries 
+```
+
+```{r}
+#Installing cleaning packages 
+install.packages("dplyr")
+library(dplyr)
+install.packages("tidyr")
+library(tidyr)
+```
+
+## Cleaning Datasets
+
+#### 1. Removing the pheno map key description at the bottom
+
+```{r}
+
+OMIM_dat <- OMIM_dat[1:349, ] #Last entry was row 349
+
+View(OMIM_dat)
+```
+
+#### 2. Moving misaligned entries
+
+**A couple of the Mouse Gene names in the last column are in the Pheno Map Key column**
+
+```{r}
+print(OMIM_dat[,13:14])
+
+```
+
+``` r
+print(OMIM_dat[,13:14])
+
+
+Pheno.map.key
+<chr>
+Mouse.Gene..from.MGI.
+<chr>
+3   Gatad2b         
+3   Ash1l           
+3   Rit1            
+3   Pigm            
+3   Tmco1           
+3   Cacna1e         
+3   Kdm5b           
+Srgap2              
+3   Syt14
+```
+
+```{r}
+#First applying it on the OMIM_dat_sep 
+typeof(OMIM_dat$Pheno.map.key) #ensuring the Pheno.map.key is a "character variable"
+
+OMIM_dat$Pheno.map.key <- as.character(OMIM_dat$Pheno.map.key)
+
+for (i in 1:nrow(OMIM_dat)) {
+  # Check if the value in 'Pheno.map.key' is a character (likely a gene name) and not a number
+  if (!is.na(OMIM_dat$Pheno.map.key[i]) && !grepl("^\\d+$", OMIM_dat$Pheno.map.key[i])) {
+    # Shift the value (gene name) to 'Mouse.Gene..from.MGI.' column
+    OMIM_dat$Mouse.Gene..from.MGI.[i] <- OMIM_dat$Pheno.map.key[i]
+    # Set the corresponding value in 'Pheno.map.key' to NA
+    OMIM_dat$Pheno.map.key[i] <- NA
+  }
+}
+
+View(OMIM_dat)
+print(subset(OMIM_dat, OMIM_dat$Mouse.Gene..from.MGI. == "Srgap2")) #Srgap2 has now been shifted into the correct column and the corresponding pheno.map.key column in filled in with NA
+```
+
+**(How to clean the second dataset, 'OMIM_dat_NE_RG')**
+
+```{r}
+print(OMIM_dat_NE_RG[,13:14])
+
+```
+
+``` r
+
+Pheno.map.key
+<chr>
+Mouse.Gene..from.MGI.
+<chr>
+2               
+2               
+2               
+3   Isg15           
+3   Isg15           
+3   Isg15           
+3   Isg15           
+Mir200b             
+Mir200b             
+Mir200a
+```
+
+```{r}
+#Applying it to the second dataset 'OMIM_NE_RG_sep'
+typeof(OMIM_dat_NE_RG$Pheno.map.key) #ensuring the Pheno.map.key is a "character variable"
+
+OMIM_dat_NE_RG$Pheno.map.key <- as.character(OMIM_dat_NE_RG$Pheno.map.key)
+
+for (i in 1:nrow(OMIM_dat_NE_RG)) {
+  # Check if the value in 'Pheno.map.key' is a character (likely a gene name) and not a number
+  if (!is.na(OMIM_dat_NE_RG$Pheno.map.key[i]) && !grepl("^\\d+$", OMIM_dat_NE_RG$Pheno.map.key[i])) {
+    # Shift the value (gene name) to 'Mouse.Gene..from.MGI.' column
+    OMIM_dat_NE_RG$Mouse.Gene..from.MGI.[i] <- OMIM_dat_NE_RG$Pheno.map.key[i]
+    # Set the corresponding value in 'Pheno.map.key' to NA
+    OMIM_dat_NE_RG$Pheno.map.key[i] <- NA
+  }
+}
+
+View(OMIM_dat_NE_RG)
+print(subset(OMIM_dat_NE_RG, OMIM_dat_NE_RG$Mouse.Gene..from.MGI. == "Mir200b")) #Mir200b has now been shifted into the correct column and the corresponding pheno.map.key column in filled in with NA
+
+
+```
+
+#### Unlike the previous Rmd, I am not going to split the Gene.Locus entries - the multiple entries are the other names for that gene (genes have multiple names) 
+
+## Saving datasets as csv files
+
+```{r}
+install.packages("readr")
+library(readr)
+write_delim(OMIM_dat, file = "cleaned OMIM_data_macro.tsv", delim = "\t", na="NA", col_names = TRUE)
+write_delim(OMIM_dat_NE_RG, file = "cleaned OMIM_data_macro_NE_RG.tsv", delim = "\t", na="NA", col_names = TRUE)
+
+```
