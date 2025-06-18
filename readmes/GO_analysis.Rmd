@@ -797,7 +797,6 @@ ggsave("../outputs/GO_analysis/ALL_shared_terms_upreg_vs_combined_upreg_in_same_
 ```
 
 
-
 #### 2. Visualisation of ALL TERMS enriched in JUST the COMBINED genes 
 ```{r}
 terms_combined_specific <- GO_files_combined[!GO_files_combined$term_id %in% GO_files_updat$term_id, ]
@@ -817,7 +816,7 @@ ggsave("../outputs/GO_analysis/GO_combined_specific_terms_with_sources.png", com
 ggsave("../outputs/GO_analysis/GO_combined_specific_terms.png", combined_specific_ggplot)
 
 
-#### Trying to group by common GO term names 
+#### Grouping by common GO term names 
 
 #First creating group terms 
 
@@ -853,10 +852,104 @@ grouped_terms_ggplot <- ggplot(grouped_terms, aes(x = New_cellType, y = term_nam
   )
 ```
 
-
-#### 3. Visualisation of ALL TERMS enriched in Non-Upreg vs Upreg 
 ```{r}
-install.packages("ggtext")
+#Plotting all enriched terms in the combined genes upreg vs upreg (including those that are found in both analysis)
+
+
+combined_all_ggplot <- ggplot(GO_files_combined, aes(x= New_cellType, y=term_name, colour = log10_pval, size = intersection_size)) + geom_point(alpha=0.8) +  scale_color_viridis_c(option = "plasma", name = "-log10(p)") + labs (
+  title = "Terms Signficantly Enriched In Upregulated Macrocephaly/Malan/Sotos Genes", 
+  subtitle = "Terms taken from Combined Genes-Upreg vs Upreg GO Analysis", 
+  x= "Cell Type",
+  y= "Term Name", 
+  size = "Gene Count"
+) + 
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.title.y = element_text(size = 10, lineheight = 1.2), axis.title = element_text(size = 10), plot.title.position = "plot", plot.caption.position = "panel")
+
+ggsave("../outputs/GO_analysis/ALL_terms_for_macro_upreg_vs_non_upreg_combined.png", combined_all_ggplot)
+
+#Noticed different types of groupings that could be made so attempting two slightly different grouping methods 
+
+#Group 1: Using 'Specification' 
+
+grouped_terms <- GO_files_combined %>%
+  mutate(category = case_when(
+    grepl("morphogenesis", term_name, ignore.case = TRUE) ~ "morphogenesis",
+    grepl("cell fate|specification", term_name, ignore.case = TRUE) ~ "specification",
+    grepl("patterning", term_name, ignore.case = TRUE) ~ "patterning",
+    grepl("signaling", term_name, ignore.case = TRUE) ~ "signaling",
+    grepl("cancer|carcinoma|leukemia|melanoma|glioma", term_name, ignore.case = TRUE) ~ "cancer",
+    grepl("infection|virus", term_name, ignore.case = TRUE) ~ "immune / infection",
+    grepl("differentiation", term_name, ignore.case = TRUE) ~ "differentiation",
+    grepl("development", term_name, ignore.case = TRUE) ~ "development",
+    TRUE ~ "Other"
+  ))
+
+grouped_terms$term_name <- factor(grouped_terms$term_name, levels = unique(grouped_terms$term_name[order(grouped_terms$category)]))
+
+# Plot grouped by category
+grouped_terms_ggplot <- ggplot(grouped_terms, aes(x = New_cellType, y = term_name)) +
+  geom_point(aes(size = intersection_size, color = -log10_pval)) +
+  scale_color_viridis_c(option = "plasma", name = "-log10(p)")+
+  theme_minimal(base_size = 10) +
+  facet_grid(category ~ ., scales = "free_y", space = "free_y") +  # vertically stacked
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text.y = element_text(angle = 0, size = 15),
+    plot.title.position = "plot"
+  ) +
+  labs(
+    title = "Grouped Enrichment of Macrocephaly/Malan/Sotos Genes by Functional Category",
+    y = "GO Term",
+    x = "Cell Type"
+  )
+
+ggsave("../outputs/GO_analysis/ALL_terms_for_macro_upreg_vs_non_upreg_combined_grouped.png", grouped_terms_ggplot)
+
+
+
+#Group 2: Using 'Glial' and 'Neuronal'
+grouped_terms <- GO_files_combined %>%
+  mutate(category = case_when(
+    grepl("morphogenesis", term_name, ignore.case = TRUE) ~ "morphogenesis",
+    grepl("patterning", term_name, ignore.case = TRUE) ~ "patterning",
+    grepl("signaling", term_name, ignore.case = TRUE) ~ "signaling",
+    grepl("cancer|carcinoma|leukemia|melanoma", term_name, ignore.case = TRUE) ~ "cancer",
+    grepl("infection|virus", term_name, ignore.case = TRUE) ~ "immune / infection",
+    grepl("differentiation", term_name, ignore.case = TRUE) ~ "differentiation",
+    grepl("development", term_name, ignore.case = TRUE) ~ "development",
+    grepl("glial|glioma", term_name, ignore.case = TRUE) ~"glial",
+    grepl("neuron|neuronal", term_name, ignore.case = TRUE) ~ "neuronal",
+    TRUE ~ "Other"
+  ))
+
+grouped_terms$term_name <- factor(grouped_terms$term_name, levels = unique(grouped_terms$term_name[order(grouped_terms$category)]))
+
+# Plot grouped by category
+grouped_terms_ggplot <- ggplot(grouped_terms, aes(x = New_cellType, y = term_name)) +
+  geom_point(aes(size = intersection_size, color = -log10_pval)) +
+  scale_color_viridis_c(option = "plasma", name = "-log10(p)")+
+  theme_minimal(base_size = 10) +
+  facet_grid(category ~ ., scales = "free_y", space = "free_y") +  # vertically stacked
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text.y = element_text(angle = 0, size = 15),
+    plot.title.position = "plot"
+  ) +
+  labs(
+    title = "Grouped Enrichment of Macrocephaly/Malan/Sotos Genes by Functional Category",
+    y = "GO Term",
+    x = "Cell Type"
+  )
+ggsave("../outputs/GO_analysis/ALL_terms_for_macro_upreg_vs_non_upreg_combined_grouped_2.png", grouped_terms_ggplot)
+
+
+```
+
+
+#### 3. Visualisation of ALL TERMS enriched in JUST Upregulated Genes - Non-Upreg vs Upreg 
+```{r}
+install.packatges("ggtext")
 library(ggtext)
 
 ```
