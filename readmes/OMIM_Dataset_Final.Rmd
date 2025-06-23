@@ -4,10 +4,12 @@ output: html_document
 date: "2025-03-09"
 ---
 
-## Loading two OMIM tsv files
+## Loading OMIM tsv files
 
--   **One file is a dataset that was generated using the search term 'macrocephaly' and the second one is one that was generated using the search term 'macrocephaly, NE-RG transition'**
--   **For all downstream cleaning, I only applied it to the 'macrocephaly' dataset**
+-   **Three Datasets:**
+    -   'macrocephaly' queried ONLY
+    -   'sotos syndrome and malan' queried - Covers genes that were missed by initial query
+    -   'macrocephaly NE_RG' - queried
 
 ```{r}
 getwd()
@@ -16,6 +18,12 @@ getwd()
 OMIM_dat <- read.delim("OMIM_Databases_Gene_Map_Queries/OMIM-Gene-Map-Retrieval.tsv", header = TRUE, sep = "\t", check.names = TRUE, skip =3)
 View(OMIM_dat)
 dim(OMIM_dat) #[1] 376 14 - 376 entries 
+```
+
+```{r}
+#Loading in OMIM table queried 'sotos syndrome' - contains the NFIX and PTEN gene entry 
+OMIM_dat_SOTOS <- read.delim("data/OMIM_Databases_Gene_Map_Queries/OMIM-Gene-Map-Retrieval_MALAN_SOTOS.tsv", header = TRUE, sep = "\t", check.names = TRUE, skip = 3)
+View(OMIM_dat_SOTOS)
 ```
 
 ```{r}
@@ -41,6 +49,8 @@ library(tidyr)
 
 OMIM_dat <- OMIM_dat[1:349, ] #Last entry was row 349
 
+OMIM_dat_SOTOS <- OMIM_dat_SOTOS[1:32, ]
+
 View(OMIM_dat)
 ```
 
@@ -50,6 +60,7 @@ View(OMIM_dat)
 
 ```{r}
 print(OMIM_dat[,13:14])
+print(OMIM_dat_SOTOS[,13:14]) #NOT THE CASE FOR OMIM_DAT_SOTOS SO NO NEED FOR FURTHER CLEANING HERE
 
 ```
 
@@ -92,7 +103,7 @@ View(OMIM_dat)
 print(subset(OMIM_dat, OMIM_dat$Mouse.Gene..from.MGI. == "Srgap2")) #Srgap2 has now been shifted into the correct column and the corresponding pheno.map.key column in filled in with NA
 ```
 
-**(How to clean the second dataset, 'OMIM_dat_NE_RG')**
+**(Optional: Cleaning 'OMIM_dat_NE_RG' dataset)**
 
 ```{r}
 print(OMIM_dat_NE_RG[,13:14])
@@ -139,7 +150,7 @@ print(subset(OMIM_dat_NE_RG, OMIM_dat_NE_RG$Mouse.Gene..from.MGI. == "Mir200b"))
 
 ```
 
-#### Unlike the previous Rmd, I am not going to split the Gene.Locus entries - the multiple entries are the other names for that gene (genes have multiple names) 
+#### Unlike the previous Rmd, I am not going to split the Gene.Locus entries - the multiple entries are the other names for that gene (genes have multiple names)
 
 ## Saving datasets as csv files
 
@@ -148,5 +159,7 @@ install.packages("readr")
 library(readr)
 write_delim(OMIM_dat, file = "cleaned OMIM_data_macro.tsv", delim = "\t", na="NA", col_names = TRUE)
 write_delim(OMIM_dat_NE_RG, file = "cleaned OMIM_data_macro_NE_RG.tsv", delim = "\t", na="NA", col_names = TRUE)
+write_delim(OMIM_dat_SOTOS, file = "data/OMIM_Databases_Gene_Map_Queries/cleaned_OMIM_data_MALAN_SOTOS.tsv", delim = "\t", na="NA", col_names = TRUE)
+
 
 ```

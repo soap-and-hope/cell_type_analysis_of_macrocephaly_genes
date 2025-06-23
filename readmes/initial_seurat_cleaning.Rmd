@@ -1,0 +1,513 @@
+---
+title: "h5_seurat_2"
+output: html_document
+date: "2025-02-28"
+---
+
+## Using Seurat to make CountsMatrix of scRNA-seq data
+
+### 1. Installing packages
+
+```{r}
+#Installing packages 
+install.packages("Seurat")
+library(Seurat)
+install.packages("SeuratObject")
+library(SeuratObject)
+install.packages("hdf5r")
+library(hdf5r)
+install.packages("rhdf5")
+library(rhdf5)
+```
+
+### 2. Loading in the data (h5 files)
+
+```{r}
+#Read in scRNAseq datafile 
+files <- list.files(path= 'GSE153162_RAW_No_KO/', pattern='.h5', full.names =TRUE)
+print(files[1:3])
+View(files)
+typeof(files) #[1] character
+str(files[1])
+
+tester <- Read10X_h5(files[1])
+View(tester)
+print(str(tester))
+```
+
+```{r}
+#Trying to find the metadata file in the h5 file
+h5ls(files[1])
+```
+
+```{r}
+h5read(files[1], "/mm10/genes")
+```
+
+```{r}
+View(h5read(files[1], "//mm10"))
+
+```
+
+### 3. Creating Individual Seurat Objects
+
+-   **Because its 23 different h5 files, its better to make 23 separate seurat objects and then merge them, rather than making them 23 different layers of one seurat object**
+-   **Basically, performing downstream pre-processing on a merged Seurat object was causing problems so instead I'm going to try and apply them all on the individual 23 objects and then merge them - also more memory-efficient**
+
+```{r}
+#Viewing all 23 files 
+sc_data <- lapply(files, Read10X_h5)
+typeof(sc_data) #[1] list 
+lapply(sc_data, dim) #[1] all 23 files have different number of rows and columns  - different number of genes across the files
+print(sc_data[1])
+View(sc_data[1])
+
+```
+
+```{r}
+#Attempting to generate SeuratObject without any prior preprocessing i.e., assigning unique values to duplicated cells 
+
+#Making Seurat Objects 
+seurat_list = list() #Making empty seurat list
+for (x in files){
+  sc_sample <- Read10X_h5(x)
+  seurat_obj <- CreateSeuratObject(counts=sc_sample, assay = "RNA", project = paste0("Sample ", x))
+  seurat_obj$sample <- paste0("Sample ", x)
+  seurat_list[[x]] <- seurat_obj
+}
+
+print(seurat_list)
+```
+
+### 4. Data Cleaning and Preprocessing of Individual Seurat Objects
+
+#### a. Filtering low counts
+
+-   **Prevents low-level exp noise from being amplified during normalization**
+-   **As performed in the original paper, first create a new column that 'calculates the percentage originating from mitochondrial RNA per cell'**
+-   **Then perform filtering based on the mitochondrial reads - om paper (mitochondrial reads \<7.5%, genes detected \> 500)**
+
+```{r}
+
+View(seurat_list[1])
+names(seurat_obj)
+
+# Check if there are any mitochondrial genes (case-sensitive)
+seurat_list <- lapply(seurat_list, function(seurat_obj){
+  mito_genes <- grep("^(mt-|MT-)", rownames(seurat_obj[["RNA"]]), value = TRUE)
+  seurat_obj[["mito_pct"]] <- PercentageFeatureSet(seurat_obj, pattern = "^mt-") #Adding column to object metadata 
+  return(seurat_obj)
+})
+
+# Print a few mitochondrial genes
+mito_genes <- grep("^(mt-|MT-)", rownames(seurat_obj[["RNA"]]), value = TRUE)
+head(mito_genes) #[1] "mt-Nd1"  "mt-Nd2"  "mt-Co1"  "mt-Co2"  "mt-Atp8" "mt-Atp6" 
+#mitochondrial genes are denoted as mt 
+
+head(seurat_list[[1]]@meta.data$mito_pct) #[1] 3.073198 1.811368 2.548294 3.540573 4.116694 3.832168
+print(str(seurat_list[[1]])) #[Now has mito_pct]
+
+```
+
+```{r}
+# Extract the mito_pct from all Seurat objects and combine into a single vector
+mt_pct_data <- lapply(seurat_list, function(seurat_obj) {
+  return(seurat_obj@meta.data$mito_pct)
+})
+
+mt_pct_combined <- unlist(mt_pct_data)
+
+mt_pct_df <- data.frame(mito_pct = mt_pct_combined, 
+                        sample = rep(names(seurat_list), sapply(mt_pct_data, length)))
+
+# Create a violin plot using ggplot2
+library(ggplot2)
+ggplot(mt_pct_df, aes(x = "mito_pct.", y = mito_pct)) +
+  geom_violin(fill = "violet" ) +
+  labs(title = "Mitochondrial Percentage Distribution", y = "mito_pct")
+
+```
+
+```{r}
+#Filtering reads 
+seurat_list <- lapply(seurat_list, function(seurat_obj){
+  seurat_obj<- subset(seurat_obj, subset= mito_pct<7.5 & nFeature_RNA > 500)
+  return(seurat_obj)
+})
+
+```
+
+#### b. Data Normalization
+
+```{r}
+seurat_list <- lapply(seurat_list, function(seurat_obj) {
+  # Normalize the data
+  seurat_obj <- NormalizeData(seurat_obj, normalization.method = "LogNormalize", assay = "RNA")
+  return(seurat_obj)
+})
+
+```
+
+#### c. Converting from Assay5 to Assay
+
+**The Assay5 is causing problems and makes downstream preprocessing difficult so we are going to convert them first**
+
+```{r}
+slotNames(seurat_list[[1]]@assays$RNA)
+```
+
+```{r}
+View(seurat_obj[1])
+View(seurat_list)
+
+
+#Converting 'Assay5' in each Seurat object into Assay 
+seurat_list <- lapply(seurat_list, function(obj){
+  
+  counts_matrix <- obj[["RNA"]]$counts
+  data_matrix <- obj[["RNA"]]$data
+  
+  new_assay <- CreateAssayObject(counts = counts_matrix)
+  new_assay@data <- data_matrix
+  
+  obj[["RNA"]] <- new_assay
+  
+  return(obj)
+
+  
+})
+
+
+str(seurat_list) #[1] $RNA:Formal class 'Assay'
+```
+
+### 5. Merging Seurat Objects
+
+```{r}
+
+head(seurat_list[[1]]@meta.data) #has mito.pct
+str(seurat_list[1]) #can see scale data 
+head(seurat_list[[1]]@assays$RNA@data)
+print(seurat_list[[1]])
+
+#Get sample IDs for each Seurat Object e.g., GSE..._RAW
+for (i in seq_along(seurat_list)){
+  seurat_list[[i]]@project.name <- names(seurat_list) [i]
+}
+print(seurat_list[[1]]@project.name) #[1] "GSE153164_RAW//GSM4635072_E11_5_filtered_gene_bc_matrices_h5.h5"
+
+#Merge
+seurat_merged <- Reduce(function(x,y){
+  merge(x,y, add.cell.ids = c(x@project.name, y@project.name))
+}, seurat_list)
+
+
+View(seurat_merged)
+```
+
+#### a. Using FindVariableFeatures to find outliers
+
+-   From paper, "[...] scaled expression values and identified the 3,000 most variable genes with `FindVariableFeatures(selection.method - "vst", nfeatures = 3000)`
+
+```{r}
+seurat_merged <- FindVariableFeatures(seurat_merged, selection.method = "vst", nfeatures = 3000, assay = "RNA", verbose = 1)
+top10 <- head(VariableFeatures(seurat_merged), 10) #[1] Finds top 10 most highly variable genes 
+print(top10) #[1] "Hba-a1"  "Hba-x"   "Hbb-y"   "Hba-a2"  "Hbb-bt"  "Hbb-bs"  "Hbb-bh1" "Cldn5"   "Sst"     "Igfbp7" 
+
+
+# Alternative approach to show only top features
+hvf_data <- seurat_merged[["RNA"]]@meta.features
+hvf_data <- hvf_data[VariableFeatures(seurat_merged),]
+hvf_data$gene <- rownames(hvf_data)
+
+# Sort by variance
+hvf_data <- hvf_data[order(hvf_data$vst.variance.standardized, decreasing = TRUE),]
+
+# Pick top 1000 for plotting
+plot_data <- head(hvf_data, 1000)
+
+# Plot with ggplot2
+library(ggplot2)
+library(ggrepel)
+p <- ggplot(plot_data, aes(x = vst.mean, y = vst.variance.standardized)) +
+  geom_point(size = 0.5, alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Top 1000 Variable Features")
+
+# Add labels for top 10
+p + geom_point(data = plot_data[1:10,], color = "violet", size = 2) +
+  geom_text_repel(data = plot_data[1:10,], aes(label = gene), color = "skyblue4")
+
+```
+
+#### b.Scaling using ScaleData
+
+```{r}
+seurat_merged <- ScaleData(seurat_merged,  vars.to.regress = c("nCount_RNA", "nFeature_RNA", "mito_pct"), do.center = TRUE, do.scale = TRUE, verbose =1 )
+View(seurat_merged)
+str(seurat_merged)
+print(head(seurat_merged))
+```
+
+## Mapping Cell ID's to Cell Types using metaData_scDevSC
+
+#### Reading in txt file from Single Cell Portal for mouse scRNA data
+
+```{r}
+
+metaData_scDevSC <- read.delim("metaData_scDevSC.txt", header = TRUE, check.names = TRUE)
+View(metaData_scDevSC)
+
+metaData_scDevSC <- metaData_scDevSC[-1,] #Remove the first column
+
+head(seurat_merged)
+print(row.names(seurat_merged@meta.data)) #The rownames have a lot of 'SeuratProject' and other unnecessary names included which do not map with the cell ID's found in the metadata file 
+```
+
+#### Cleaning up Seurat meta.data rownames
+
+```{r}
+rownames(seurat_merged@meta.data) <- gsub("SeuratProject_", "", rownames(seurat_merged@meta.data))
+print(rownames(seurat_merged@meta.data))
+
+#Going to restructure the column names to fit those found in the 'NAME' column in metaData
+rownames(seurat_merged@meta.data) <- gsub("filtered.*_", "", rownames(seurat_merged@meta.data))
+print(rownames(seurat_merged@meta.data))
+#Now looks like this: [2] "GSE153164_RAW..GSM4635072_E11_5_AAACCTGAGGACGAAA.1"
+
+print((grep("[GSE.*_RAW]", print(rownames(seurat_merged@meta.data)))))
+rownames(seurat_merged@meta.data) <- gsub("GSE.*_RAW_No_KO", "", rownames(seurat_merged@meta.data))
+print(rownames(seurat_merged@meta.data))
+#Now looks like this: [2] "..GSM4635072_E11_5_AAACCTGAGGACGAAA.1"
+
+#Removing the ..GSM bit 
+rownames(seurat_merged@meta.data) <- gsub("//GSM[0-9]+_", "", rownames(seurat_merged@meta.data))
+print(rownames(seurat_merged@meta.data)) #[1] "E11_5_AAACCTGAGGACGAAA.1" - finally somewhat matches the ones seen in the 'NAME' column in the metaData file 
+
+#Removing the '.1' at the end
+rownames(seurat_merged@meta.data) <- gsub("-1$", "", rownames(seurat_merged@meta.data))
+
+```
+
+#### Cleaning up the metadata file to match the Cell ID in the Seurat
+
+```{r}
+#Removing the 'v1' in the 'NAME' entries in the metaData_scDevSC
+v1_NAME <- (subset(metaData_scDevSC, grepl("v1", metaData_scDevSC$NAME)))
+head(v1_NAME)
+dim(v1_NAME) #[1] there are 1495 entries 
+
+metaData_scDevSC$NAME <- gsub("v1_", "", metaData_scDevSC$NAME)
+View(metaData_scDevSC)
+print(head(metaData_scDevSC)) #[1] E10_AAACCTGAGGGTCTCC-1 - now the v1 and the extra _ is removed
+
+
+#Removing the "-1 bit to match those in OMIM_dat
+metaData_scDevSC$NAME <- gsub("-1", "", metaData_scDevSC$NAME)
+print(head(metaData_scDevSC))
+
+print(head(metaData_scDevSC))
+
+
+missing_ids <- setdiff(rownames(seurat_merged@meta.data), metaData_scDevSC$NAME)
+print(missing_ids) #Seeing how many of the RAW seurat_merged cells don't have a match 
+print(length(missing_ids)) #17,987 missing 
+```
+
+#### Mapping Cell ID to corresponding Cell Type
+
+```{r}
+
+library(dplyr)
+
+cell_ids <- rownames(seurat_merged@meta.data) #81,435 cell IDs in total in the seurat object
+temp_df <- as.data.frame(cell_ids)
+colnames(temp_df) <- "cell_ids"
+print(temp_df)
+
+metaData_scDevSC <- as.data.frame(metaData_scDevSC)
+print(colnames(metaData_scDevSC)[1])
+colnames(metaData_scDevSC)[1] <- "cell_ids"
+typeof(metaData_scDevSC)
+
+View((intersect(cell_ids, metaData_scDevSC$cell_ids))) #63448 matches 
+matching_ids <- intersect(cell_ids, metaData_scDevSC$cell_ids)
+
+temp_df <- left_join(temp_df, metaData_scDevSC, by = "cell_ids")
+View(temp_df)
+
+#It has joined the metadata to the temp_df file but its still showing 81, 435 entires - basically its kept in ALL cell_ids even those that don't have a corresponding entry in the metadata file and just fills those with NA's 
+
+(temp_df[,1:28])
+
+cleaned_temp_df <- subset(temp_df, (!is.na(temp_df[,2])))
+View(cleaned_temp_df) #Now has 63,448 entries - MATCHING ONES ONLY
+
+
+
+```
+
+#### Finally assigning it to the seurat_merged object
+
+```{r}
+#Just using temp_df as it has the same number of cell IDs as the seurat object 
+
+seurat_merged@meta.data[["New_cellType"]] <- NULL
+
+View(temp_df)
+print(DefaultAssay(seurat_merged))
+cell_type_data <- temp_df$New_cellType
+names(cell_type_data) <- temp_df$cell_ids
+print(names(cell_type_data))
+
+existing_cells <- intersect(names(cell_type_data), colnames(seurat_merged))
+print(existing_cells)
+cell_type_data <- cell_type_data[existing_cells]
+
+
+seurat_merged <- AddMetaData(
+  object = seurat_merged,
+  metadata = cell_type_data,
+  col.name = "New_cellType"
+)
+
+
+#Alternative method - Creating new section in meta.data for cell type - #seurat_merged@meta.data$New_cellType <- temp_df$New_cellType
+#seurat_merged now has a cell type section in neta.data
+
+print(head(seurat_merged))
+
+
+print(str(seurat_merged@meta.data$New_cellType))
+print(str(seurat_merged@meta.data))
+View(seurat_merged@meta.data)
+print(str(seurat_merged@assays$RNA@data))
+
+print(colnames(seurat_merged@assays$RNA)) #Need to change the names to match the naming in the meta.data 
+print(rownames(seurat_merged@meta.data))
+colnames(seurat_merged@assays$RNA) <- rownames(seurat_merged@meta.data)
+
+#Still getting an error when trying to RunPCA about active.idents so nede to change the names
+#checking current active.indents
+head(Idents(seurat_merged)) #Still the same naming as the original
+
+#Update active.idents
+Idents(seurat_merged) <- factor(rep("defualt", ncol(seurat_merged)))
+names(Idents(seurat_merged)) <- colnames(seurat_merged)
+
+new_idents <- Idents(seurat_merged)
+levels(new_idents) <- "default" #I spelt it wrong initially 
+Idents(seurat_merged) <- new_idents
+
+
+
+
+```
+
+## Dimensional Reduction 
+
+### Elbow Plot
+
+```{r}
+######################## Do this bit 
+```
+
+### Running PCA
+
+```{r}
+  seurat_merged <- RunPCA(seurat_merged,
+                          features = VariableFeatures(seurat_merged),
+                          verbose =TRUE,
+                          npcs =50)
+```
+
+```{r}
+str(seurat_merged@reductions$pca)
+pca_plot<- DimPlot(seurat_merged, reduction ="pca", raster = FALSE, group.by = "New_cellType", pt.size=0.3, label=FALSE, repel=FALSE)+ labs(title = "PCA Plot of Merged Seurat Object")+ theme_minimal() + theme(legend.position = "bottom") +theme(axis.text=element_text(size=9), legend.text = element_text(size=4))
+#Use +NoLegend for no legend + label = TRUE
+
+print(pca_plot)
+
+ggsave("PCA_PLOT_with_NA.png", plot = pca_plot, width = 12, height=10)
+```
+
+### Running ElbowPlot Post-PCA - Determine dimensions
+
+```{r}
+ElbowPlot(seurat_merged, ndims = 50, reduction = "pca")
+```
+
+**Around PCA 25 to 30 captures the majority variance**
+
+```{r}
+seurat_merged <- FindNeighbors(seurat_merged, dims = 1:25)
+seurat_merged <- FindClusters(seurat_merged, resolution = 0.5)
+seurat_merged <- RunUMAP(seurat_merged, dim=1:25) 
+```
+
+```{r}
+umap_plot <- DimPlot(seurat_merged, reduction = "umap", label = FALSE, group.by = "New_cellType")
+print(umap_plot)
+ggsave("umap_WITH_NA.png", plot = umap_plot, width = 12, height=10)
+
+```
+
+#### Cleaning the Erroneous Cell Types
+
+```{r}
+missing_cell_types <- (is.na(seurat_merged@meta.data$New_cellType))
+print(length(subset(missing_cell_types, missing_cell_types=="TRUE"))) #17987 have NA's as a cell type 
+
+## Trying to create a subset again
+cells_with_type <- rownames(seurat_merged@meta.data)[!missing_cell_types]
+seurat_subset <- subset(seurat_merged, cells = cells_with_type)
+
+#Checking that NA's have been removed 
+table(is.na(seurat_subset@meta.data$New_cellType)) #[1] FALSE
+print(length(seurat_subset@meta.data$New_cellType)) #63448 which is how many we had without the NA
+
+##Remove unnecessary cell types (e.g., Doublet, Low counts)
+print(unique(seurat_subset@meta.data$New_cellType))
+unnecessary_cell_types <- seurat_subset@meta.data$New_cellType == "Doublet" | seurat_subset@meta.data$New_cellType == "Low quality cells"
+#Doing sum shows that there are 1543 cells that are either doublet or low quality cells 
+useful_cell_types <- rownames(seurat_subset@meta.data)[!unnecessary_cell_types] #[1] Length = 61,905 cells 
+
+
+seurat_subset_cleaned = subset(seurat_subset, cells = useful_cell_types)
+View(seurat_subset_cleaned)
+
+DefaultAssay(seurat_subset_cleaned) #[1] Ensuring its still RNA
+
+```
+
+### Plotting UMAP of Cleaned Seurat
+
+```{r}
+umap_plot <- DimPlot(seurat_subset_cleaned, reduction = "umap", label = FALSE, group.by = "New_cellType")
+print(umap_plot)
+ggsave("umap_WITHOUT_NA_AND_CLEANED.png", plot = umap_plot, width = 12, height=10)
+```
+
+```{r}
+VlnPlot(seurat_subset_cleaned, features = ("Nfix"), group.by = "New_cellType") +theme(legend.position = "none")
+
+```
+
+```{r}
+
+VlnPlot(seurat_subset_cleaned, features = c("Nfia", "Nfix"), group.by = "New_cellType") +theme(legend.position = "none")
+
+VlnPlot(seurat_subset_cleaned, features = ("Plag1"), group.by = "New_cellType") +theme(legend.position = "none")
+
+```
+
+\#####**Do one to compare exp levels of NFIX and the top10 DEGs**
+
+## Saving Seurat Object
+```{r}
+#Saving Seurat Object
+install.packages("qs")
+library(qs)
+
+qs::qsave(seurat_subset_cleaned, "seurat_subset_cleaned.qs")
+```
