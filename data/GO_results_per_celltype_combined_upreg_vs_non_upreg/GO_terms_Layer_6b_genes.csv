@@ -1,0 +1,2 @@
+"query","significant","p_value","term_size","query_size","intersection_size","precision","recall","term_id","source","term_name","effective_domain_size","source_order","evidence_codes","intersection","parents_str"
+"query_1",TRUE,0.0069973203254744,27,40,5,0.125,0.185185185185185,"GO:0019003","GO:MF","GDP binding",2843,3363,"IDA,IBA,ISS ISO,IBA,ISO IBA","ENSMUSG00000026825,ENSMUSG00000028057,ENSMUSG00000057614,ENSMUSG00000032470,ENSMUSG00000008859","GO:0032561,GO:0043168"
